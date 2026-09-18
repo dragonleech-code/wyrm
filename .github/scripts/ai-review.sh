@@ -117,7 +117,7 @@ jq -n \
   --rawfile user "$work/user" \
   '{
      model: $model,
-     max_tokens: 8000,
+     max_tokens: 32000,
      messages: [
        {role: "system", content: $system},
        {role: "user", content: $user}
@@ -139,17 +139,26 @@ if [ "$http_code" != "200" ] || jq -e '.error' "$work/response.json" >/dev/null;
   exit 1
 fi
 
+echo "usage: $(jq -c '.usage' "$work/response.json")"
+
 review=$(jq -r '.choices[0].message.content // empty' "$work/response.json")
 finish=$(jq -r '.choices[0].finish_reason // "unknown"' "$work/response.json")
+# A truncated answer is usually the model's half-finished reasoning, not a
+# review; posting it would also overwrite the last good comment.
+if [ "$finish" = "length" ]; then
+  echo "::error::Model hit max_tokens before finishing (reasoning counts toward it); nothing posted. Lower AI_REVIEW_EFFORT or raise max_tokens."
+  exit 1
+fi
 if [ -z "$review" ]; then
   echo "::error::Model returned no text (finish_reason: ${finish})"
   exit 1
 fi
-if [ "$finish" = "length" ]; then
-  review+=$'\n\n_(Output hit the token limit and may be incomplete.)_'
-fi
 
+# Reasoning tokens bill as output; some providers (Gemini) leave them out of
+# completion_tokens, so show them separately when reported.
 usage=$(jq -r '.usage | "\(.prompt_tokens // "?") in / \(.completion_tokens // "?") out"
+  + (if .completion_tokens_details.reasoning_tokens then " + \(.completion_tokens_details.reasoning_tokens) reasoning" else "" end)
+  + (if .total_tokens then " (\(.total_tokens) total)" else "" end)
   + (if .cost then " · $\(.cost * 10000 | round / 10000)" else "" end)' "$work/response.json")
 
 # One comment per model, so comparing models on the same PR doesn't overwrite.
