@@ -206,6 +206,8 @@ func runWith(opts runOptions, args []string, stdout, stderr io.Writer, runner tm
 		return a.report(a.status(args[1:]))
 	case "send":
 		return a.report(a.send(args[1:]))
+	case "export":
+		return a.report(a.export(args[1:]))
 	case "init":
 		return a.report(a.init(args[1:]))
 	case "setup-tmux":
@@ -283,6 +285,7 @@ Usage:
   wyrm validate [-config P]  check the effective config parses and validates (-strict)
   wyrm status [-format FMT]  print agent status across sessions (FMT: text, json, tmux, waybar, sketchybar)
   wyrm send [target] [cmd]   send command or keys to target session/window/pane (-l, -n, -r)
+  wyrm export [-o file]      write running sessions as JSON (-n N, -current)
   wyrm list [-format FMT]    list running sessions (FMT: table, json, toml, names)
   wyrm list-configs          list candidate config file paths (used by shell completion)
   wyrm migrate-config        move the local config into the shared config directory
