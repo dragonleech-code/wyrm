@@ -28,6 +28,14 @@ exclude="${EXCLUDE_REGEX:-(^|/)(go\.sum|vendor/.*|.*\.lock|package-lock\.json)$}
 context_file="${CONTEXT_FILE:-CLAUDE.md}"
 api_url="${OPENROUTER_URL:-https://openrouter.ai/api/v1/chat/completions}"
 
+# Tolerate a secret pasted with surrounding whitespace or as a full "Bearer ..."
+# header value; either one reaches OpenRouter as "Missing Authentication header".
+key="${OPENROUTER_API_KEY:-}"
+key="${key#"${key%%[![:space:]]*}"}"
+key="${key%"${key##*[![:space:]]}"}"
+key="${key#Bearer }"
+OPENROUTER_API_KEY="$key"
+
 # Forks don't receive secrets; that is expected, not a failure.
 if [ -z "${OPENROUTER_API_KEY:-}" ]; then
   echo "::notice::OPENROUTER_API_KEY not available (fork PR or unset secret); skipping AI review"
