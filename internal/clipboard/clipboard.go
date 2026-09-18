@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"github.com/jskoll/wyrm/internal/process"
 	"io"
 	"os"
 	"os/exec"
@@ -107,7 +108,8 @@ var writeSystemClipboard = func(text string) error {
 	if err != nil {
 		return err
 	}
-	cmd := exec.Command(name, args...)
+	cmd, cancel := process.Command(name, args...)
+	defer cancel()
 	cmd.Stdin = strings.NewReader(text)
 	return cmd.Run()
 }

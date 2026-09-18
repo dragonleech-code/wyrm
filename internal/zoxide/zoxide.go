@@ -12,6 +12,7 @@ package zoxide
 
 import (
 	"fmt"
+	"github.com/jskoll/wyrm/internal/process"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -33,7 +34,9 @@ func Available() bool {
 // Query returns the directories zoxide knows about, most-frecent first,
 // trimmed to at most limit entries (limit <= 0 means no trimming).
 func Query(limit int) ([]Entry, error) {
-	out, err := exec.Command("zoxide", "query", "--list", "--score").Output()
+	cmd, cancel := process.Command("zoxide", "query", "--list", "--score")
+	defer cancel()
+	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("zoxide query: %w", err)
 	}
@@ -77,5 +80,7 @@ func parseEntries(out string) []Entry {
 // afford to fail a session build over zoxide's own bookkeeping should
 // ignore the error rather than propagate it.
 func Add(path string) error {
-	return exec.Command("zoxide", "add", path).Run()
+	cmd, cancel := process.Command("zoxide", "add", path)
+	defer cancel()
+	return cmd.Run()
 }

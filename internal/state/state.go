@@ -107,27 +107,30 @@ func (s *Store) MarkStarted(dir string) error {
 	if s.started[dir] {
 		return nil
 	}
-	s.started[dir] = true
-
-	// An unobtainable lock is not worth failing a session start over, so the
-	// merge below runs either way. It is the merge that actually preserves a
-	// concurrent writer's entries; the lock only makes it reliable. Doing a
-	// blind save here instead — the first version of this fix — reintroduced
-	// exactly the loss it was meant to prevent whenever the lock timed out.
-	if unlock, err := lockFile(s.path); err == nil {
-		defer unlock()
+	unlock, err := lockFile(s.path)
+	if err != nil {
+		return fmt.Errorf("locking project history: %w", err)
 	}
+	defer unlock()
 
 	// Re-read inside the lock and merge whatever landed while we waited.
 	if data, rerr := os.ReadFile(s.path); rerr == nil {
 		var ff fileFormat
-		if toml.Unmarshal(data, &ff) == nil {
-			for _, d := range ff.Started {
-				s.started[d] = true
-			}
+		if err := toml.Unmarshal(data, &ff); err != nil {
+			return fmt.Errorf("reading project history: %w", err)
 		}
+		for _, d := range ff.Started {
+			s.started[d] = true
+		}
+	} else if !errors.Is(rerr, os.ErrNotExist) {
+		return fmt.Errorf("reading project history: %w", rerr)
 	}
-	return s.save()
+	s.started[dir] = true
+	if err := s.save(); err != nil {
+		delete(s.started, dir)
+		return err
+	}
+	return nil
 }
 
 // How long MarkStarted waits for another wyrm process to finish its write.

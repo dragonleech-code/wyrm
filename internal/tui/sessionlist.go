@@ -1,6 +1,9 @@
 package tui
 
-import "github.com/jskoll/wyrm/internal/sessions"
+import (
+	"github.com/jskoll/wyrm/internal/sessions"
+	"github.com/jskoll/wyrm/internal/tmux"
+)
 
 // This file describes what the Sessions panel lists.
 //
@@ -62,12 +65,19 @@ func (m Model) sessionEntries() []sessionEntry {
 		}
 	}
 
-	running := make(map[string]bool, len(m.sessions))
+	running := make(map[string]string, len(m.sessions))
 	for _, s := range m.sessions {
-		running[s.Name] = true
+		running[s.Name] = s.ID
 		e := sessionEntry{Name: s.Name, Session: s, Running: true}
 		if p, ok := byName[s.Name]; ok {
 			e.Project, e.HasProject = p, true
+		} else {
+			for _, p := range m.projects {
+				if tmux.SanitizeName(p.Name) == s.Name {
+					e.Project, e.HasProject = p, true
+					break
+				}
+			}
 		}
 		entries = append(entries, e)
 	}
@@ -78,7 +88,7 @@ func (m Model) sessionEntries() []sessionEntry {
 	// as stopped in the same frame its session is listed as running.
 	seen := make(map[string]bool, len(m.projects))
 	for _, p := range m.projects {
-		if running[p.Name] || seen[p.Name] {
+		if runningProjectID(running, p.Name) != "" || seen[p.Name] {
 			continue
 		}
 		seen[p.Name] = true

@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/jskoll/wyrm/internal/tmux"
 )
 
 // Project is a discoverable wyrm config: the session name it would produce and
@@ -56,7 +58,15 @@ type nameCacheEntry struct {
 // is the already-stat'ed file, since callers have had to stat it to know it
 // exists.
 func cachedProjectInfo(path string, shared bool, info os.FileInfo) (name string, aliases []string) {
-	if v, ok := nameCache.Load(path); ok {
+	abs, err := filepath.Abs(path)
+	if err == nil {
+		path = abs
+	}
+	cacheKey := struct {
+		path   string
+		shared bool
+	}{path, shared}
+	if v, ok := nameCache.Load(cacheKey); ok {
 		e := v.(nameCacheEntry)
 		if e.size == info.Size() && e.mtime.Equal(info.ModTime()) {
 			return e.name, e.aliases
@@ -72,7 +82,7 @@ func cachedProjectInfo(path string, shared bool, info os.FileInfo) (name string,
 		name = projectNameFrom(cfg, path, shared)
 		aliases = cfg.Session.Aliases
 	}
-	nameCache.Store(path, nameCacheEntry{size: info.Size(), mtime: info.ModTime(), name: name, aliases: aliases})
+	nameCache.Store(cacheKey, nameCacheEntry{size: info.Size(), mtime: info.ModTime(), name: name, aliases: aliases})
 	return name, aliases
 }
 
@@ -176,13 +186,41 @@ func DiscoverWildcardProjects(settings *Settings) []Project {
 		if err != nil {
 			continue
 		}
+		template, templateErr := Load(configPath)
 		for _, dir := range dirs {
-			out = append(out, Project{
+			// A directory's own config takes precedence regardless of where
+			// discovery was invoked. Do not search its parents for a template.
+			local := ""
+			for _, file := range []string{DefaultFileName, LegacyFileName} {
+				path := filepath.Join(dir, file)
+				if _, err := os.Stat(path); err == nil {
+					local = path
+					break
+				}
+			}
+			if local != "" {
+				p := Project{Name: filepath.Base(dir), Path: local}
+				if cfg, err := Load(local); err == nil {
+					p.Name = projectNameFrom(cfg, local, false)
+					p.Aliases = cfg.Session.Aliases
+				}
+				out = append(out, p)
+				continue
+			}
+			p := Project{
 				Name:     filepath.Base(dir),
 				Path:     configPath,
 				Root:     dir,
 				Wildcard: true,
-			})
+			}
+			if templateErr == nil {
+				identity := template.Session
+				identity.Root = dir
+				if name, _, err := identity.Resolve(template.Dir()); err == nil {
+					p.Name = name
+				}
+			}
+			out = append(out, p)
 		}
 	}
 	return out
@@ -368,6 +406,22 @@ func (ix ProjectIndex) Find(name string) (Project, bool) {
 	}
 	p, ok := ix.byAlias[name]
 	return p, ok
+}
+
+// FindSession matches a live session's identity, never another project's alias.
+// Exact names win over tmux's substituted spelling.
+func (ix ProjectIndex) FindSession(name string) (Project, bool) {
+	for _, p := range ix.projects {
+		if p.Name == name {
+			return p, true
+		}
+	}
+	for _, p := range ix.projects {
+		if tmux.SanitizeName(p.Name) == name {
+			return p, true
+		}
+	}
+	return Project{}, false
 }
 
 // Projects returns the discovered projects in discovery order.

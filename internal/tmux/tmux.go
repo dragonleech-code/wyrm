@@ -4,6 +4,7 @@ package tmux
 import (
 	"errors"
 	"fmt"
+	"github.com/jskoll/wyrm/internal/process"
 	"os"
 	"os/exec"
 	"strings"
@@ -22,6 +23,9 @@ type Exec struct {
 	// default server. Used by integration tests to stay isolated, and
 	// configurable via [tmux].socket / WYRM_TMUX_SOCKET for real use.
 	SocketName string
+	// ConfigFile overrides the server startup config (-f). Integration tests
+	// use os.DevNull so personal plugins and options cannot affect fixtures.
+	ConfigFile string
 
 	// Command overrides the binary invoked in place of "tmux" — a full path,
 	// or a wrapper/fork name like "byobu" or "psmux". Empty uses "tmux",
@@ -49,10 +53,15 @@ func (e Exec) bin() string {
 // where tmux puts its diagnostics and callers match on them (see
 // FindSessionID's "no server running" handling).
 func (e Exec) Run(args ...string) (string, error) {
+	if e.ConfigFile != "" {
+		args = append([]string{"-f", e.ConfigFile}, args...)
+	}
 	if e.SocketName != "" {
 		args = append([]string{"-L", e.SocketName}, args...)
 	}
-	out, err := exec.Command(e.bin(), args...).Output()
+	cmd, cancel := process.Command(e.bin(), args...)
+	defer cancel()
+	out, err := cmd.Output()
 	if err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) && len(exitErr.Stderr) > 0 {
@@ -148,6 +157,9 @@ func InsideTmux() bool {
 // session built on a named socket/binary would attach to the wrong server.
 func (e Exec) Attach(target string) error {
 	args := []string{"attach-session", "-t", target}
+	if e.ConfigFile != "" {
+		args = append([]string{"-f", e.ConfigFile}, args...)
+	}
 	if e.SocketName != "" {
 		args = append([]string{"-L", e.SocketName}, args...)
 	}

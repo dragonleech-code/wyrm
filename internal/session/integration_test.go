@@ -26,7 +26,7 @@ func TestIntegration(t *testing.T) {
 		t.Skip("tmux not installed")
 	}
 
-	r := tmux.Exec{SocketName: fmt.Sprintf("wyrm-it-%d", os.Getpid())}
+	r := tmux.Exec{ConfigFile: os.DevNull, SocketName: fmt.Sprintf("wyrm-it-%d", os.Getpid())}
 	t.Cleanup(func() { r.Run("kill-server") }) //nolint:errcheck
 
 	root := t.TempDir()
@@ -128,7 +128,7 @@ func TestIntegrationDottedSessionName(t *testing.T) {
 		t.Skip("tmux not installed")
 	}
 
-	r := tmux.Exec{SocketName: fmt.Sprintf("wyrm-it-dot-%d", os.Getpid())}
+	r := tmux.Exec{ConfigFile: os.DevNull, SocketName: fmt.Sprintf("wyrm-it-dot-%d", os.Getpid())}
 	t.Cleanup(func() { r.Run("kill-server") }) //nolint:errcheck
 
 	root := t.TempDir()
@@ -195,7 +195,7 @@ func TestIntegrationFreezeWorkingDirectoryRoundtrip(t *testing.T) {
 		t.Skip("tmux not installed")
 	}
 
-	r := tmux.Exec{SocketName: fmt.Sprintf("wyrm-it-freeze-%d", os.Getpid())}
+	r := tmux.Exec{ConfigFile: os.DevNull, SocketName: fmt.Sprintf("wyrm-it-freeze-%d", os.Getpid())}
 	t.Cleanup(func() { r.Run("kill-server") }) //nolint:errcheck
 
 	root := t.TempDir()

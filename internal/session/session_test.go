@@ -155,6 +155,8 @@ func TestCreateSplitTree(t *testing.T) {
 		// tmux doesn't always name a session what was asked for, so the real
 		// name is queried separately from the IDs above — see tmux.SessionName.
 		"display-message -p -t $1 -F #{session_name}",
+		"show-options -w -A -v -t @1 synchronize-panes",
+		"set-window-option -t @1 synchronize-panes off",
 		// second entry splits the initial pane %1 -> %2 (breadth first)
 		"split-window -d -t %1 -h -P -F #{pane_id} -c /tmp/proj -l 30%",
 		// child splits its parent %2 -> %3
@@ -1122,7 +1124,7 @@ func TestCreateRunStartsProcessAndSkipsSendKeys(t *testing.T) {
 	}
 	joined := strings.Join(r.joined(), "\n")
 	// The window's initial pane gets its process from new-session itself.
-	if !strings.Contains(joined, "-n w -c /tmp/proj -- npm run dev") {
+	if !strings.Contains(joined, "respawn-pane -k -t %1 -c /tmp/proj -- npm run dev") {
 		t.Errorf("initial pane did not start its run command:\n%s", joined)
 	}
 	// "--" guards a command that looks like a flag.

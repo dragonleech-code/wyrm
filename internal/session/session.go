@@ -149,7 +149,7 @@ func Create(r tmux.Runner, cfg *config.Config, stdout, stderr io.Writer, opts ..
 		winEnvs[i] = we
 		ie := we
 		if len(w.Splits) > 0 && w.Splits[0].Type == "" {
-			ie = mergeEnv(we, w.Splits[0].Env)
+			_, ie, _ = paneAttributes(w.Splits[0], wr, we)
 		}
 		initEnvs[i] = ie
 	}
@@ -168,10 +168,8 @@ func Create(r tmux.Runner, cfg *config.Config, stdout, stderr io.Writer, opts ..
 		// w.Root being empty silently ignored splits[0].root whenever the
 		// window also had a root, and started the initial pane in the wrong
 		// directory.
-		if len(w.Splits) > 0 && w.Splits[0].Type == "" && w.Splits[0].Root != "" {
-			if ir, err := config.ResolveRoot(roots[i], w.Splits[0].Root); err == nil {
-				initRoot = ir
-			}
+		if len(w.Splits) > 0 && w.Splits[0].Type == "" {
+			initRoot, _, _ = paneAttributes(w.Splits[0], roots[i], winEnvs[i])
 		}
 		initRoots[i] = initRoot
 	}
@@ -190,6 +188,8 @@ func Create(r tmux.Runner, cfg *config.Config, stdout, stderr io.Writer, opts ..
 		name = first.name
 	}
 	id := first.sessionID
+	windowIDs := make([]string, len(cfg.Windows))
+	syncStates := make([]string, len(cfg.Windows))
 
 	for i, w := range cfg.Windows {
 		windowID, paneID := first.windowID, first.paneID
@@ -200,14 +200,44 @@ func Create(r tmux.Runner, cfg *config.Config, stdout, stderr io.Writer, opts ..
 				return "", "", false, rollback(r, id, stderr, werr)
 			}
 		}
+		windowIDs[i] = windowID
+		// send-keys obeys synchronize-panes, including an inherited global
+		// setting. Temporarily disable it throughout initialization.
+		out, serr := r.Run("show-options", "-w", "-A", "-v", "-t", windowID, "synchronize-panes")
+		if serr != nil {
+			return "", "", false, rollback(r, id, stderr, tmux.CmdErr(serr, out))
+		}
+		syncStates[i] = out
+		if out, serr := r.Run("set-window-option", "-t", windowID, "synchronize-panes", "off"); serr != nil {
+			return "", "", false, rollback(r, id, stderr, tmux.CmdErr(serr, out))
+		}
 		_, _ = fmt.Fprintf(stdout, "window %s: %s\n", windowID, w.Name)
 		buildWindow(r, windowID, paneID, w, splitCtx{
 			root: roots[i], envMap: winEnvs[i], preWindow: w.PreWindow, keys: keys,
 		}, stderr)
+		enablePaneTitles(r, windowID, cfg.Session, stderr)
 	}
 
 	// Every pane now exists, so every target is known: type the lot.
 	keys.flush(r, stderr)
+	for i, w := range cfg.Windows {
+		syncState := syncStates[i]
+		setting := w.Synchronize
+		if setting == nil {
+			setting = w.SynchronizePanes
+		}
+		if setting != nil {
+			syncState = "off"
+			if *setting {
+				syncState = "on"
+			}
+		}
+		if syncState == "on" {
+			if out, err := r.Run("set-window-option", "-t", windowIDs[i], "synchronize-panes", "on"); err != nil {
+				warnf(stderr, "restoring synchronize-panes: %v", tmux.CmdErr(err, out))
+			}
+		}
+	}
 
 	// post_window runs only now — a real subprocess, unlike pre_window's
 	// typed command, so it needs every pane's own command to have actually
@@ -218,8 +248,6 @@ func Create(r tmux.Runner, cfg *config.Config, stdout, stderr io.Writer, opts ..
 			warnf(stderr, "post_window failed for window %q: %v", w.Name, err)
 		}
 	}
-
-	enablePaneTitles(r, id, cfg.Session, stderr)
 
 	if cfg.Session.StartupWindow != "" {
 		selectStartup(r, id, cfg.Session.StartupWindow, cfg.Session.StartupPane, stderr)
@@ -483,11 +511,33 @@ func paneProcess(w config.Window) []string {
 		return nil
 	}
 	first := w.Splits[0]
-	if first.Type != "" || first.Run == "" {
+	_, _, command := paneAttributes(first, "", nil)
+	if first.Type != "" || command == "" {
 		return nil
 	}
 	// "--" so a command starting with "-" isn't read as more tmux flags.
-	return []string{"--", first.Run}
+	return []string{"--", startupWaitCommand}
+}
+
+// Keep direct-process panes alive until options and the complete layout exist.
+// respawn-pane replaces this process after remain-on-exit is installed.
+const startupWaitCommand = "exec sleep 2147483647"
+
+// Leading children reuse their parent's physical pane. Resolve their creation
+// attributes before creating that pane, without changing sibling inheritance.
+func paneAttributes(s config.Split, base string, env map[string]string) (string, map[string]string, string) {
+	root, _ := config.ResolveRoot(base, s.Root) // ValidateRoots already checked it.
+	env = mergeEnv(env, s.Env)
+	command := s.Run
+	for len(s.Children) > 0 && s.Children[0].Type == "" {
+		s = s.Children[0]
+		root, _ = config.ResolveRoot(root, s.Root)
+		env = mergeEnv(env, s.Env)
+		if s.Run != "" {
+			command = s.Run
+		}
+	}
+	return root, env, command
 }
 
 func buildWindow(r tmux.Runner, windowID, initialPane string, w config.Window, ctx splitCtx, stderr io.Writer) {
@@ -497,24 +547,17 @@ func buildWindow(r tmux.Runner, windowID, initialPane string, w config.Window, c
 	// window, so it is created here rather than passed in.
 	ctx.done = map[string]bool{}
 
-	// Window-level synchronize-panes
-	if (w.Synchronize != nil && *w.Synchronize) || (w.SynchronizePanes != nil && *w.SynchronizePanes) {
-		if out, err := r.Run("set-window-option", "-t", windowID, "synchronize-panes", "on"); err != nil {
-			warnf(stderr, "failed to enable synchronize-panes for window %q: %v", w.Name, tmux.CmdErr(err, out))
-		}
-	}
-
 	// Window-level remain-on-exit
-	if w.RemainOnExit != nil && *w.RemainOnExit {
-		if out, err := r.Run("set-window-option", "-t", windowID, "remain-on-exit", "on"); err != nil {
+	if w.RemainOnExit != nil {
+		if out, err := r.Run("set-window-option", "-t", windowID, "remain-on-exit", boolOption(*w.RemainOnExit)); err != nil {
 			warnf(stderr, "failed to enable remain-on-exit for window %q: %v", w.Name, tmux.CmdErr(err, out))
 		}
 	}
 
 	var paneToZoom string
 	ctx.onPaneCreated = func(paneID string, s config.Split) {
-		if s.RemainOnExit != nil && *s.RemainOnExit {
-			if out, err := r.Run("set-option", "-p", "-t", paneID, "remain-on-exit", "on"); err != nil {
+		if s.RemainOnExit != nil {
+			if out, err := r.Run("set-option", "-p", "-t", paneID, "remain-on-exit", boolOption(*s.RemainOnExit)); err != nil {
 				warnf(stderr, "failed to set remain-on-exit on pane %s: %v", paneID, tmux.CmdErr(err, out))
 			}
 		}
@@ -541,6 +584,13 @@ func buildWindow(r tmux.Runner, windowID, initialPane string, w config.Window, c
 			warnf(stderr, "failed to zoom pane %s: %v", paneToZoom, tmux.CmdErr(err, out))
 		}
 	}
+}
+
+func boolOption(v bool) string {
+	if v {
+		return "on"
+	}
+	return "off"
 }
 
 // splitCtx is what a level of the split tree inherits from the one above it:
@@ -583,8 +633,11 @@ func applySplits(r tmux.Runner, basePane string, splits []config.Split, ctx spli
 		splitEnvs[i] = splitEnv
 
 		pane := current
+		paneRoot, paneEnv, command := paneAttributes(s, ctx.root, ctx.envMap)
 		if s.Type != "" {
-			newPane, err := splitPane(r, current, s, root, envArgs(splitEnv))
+			process := s
+			process.Run = command
+			newPane, err := splitPane(r, current, process, paneRoot, envArgs(paneEnv))
 			if err != nil {
 				warnf(stderr, "failed to split pane: %v", err)
 				continue // panes[i] stays "": skipped below
@@ -596,6 +649,9 @@ func applySplits(r tmux.Runner, basePane string, splits []config.Split, ctx spli
 		}
 		panes[i] = pane
 		current = pane
+		if command != "" {
+			ctx.keys.launch(pane, paneRoot, paneEnv, command)
+		}
 	}
 
 	// A first entry with a type splits basePane and lands its command in the
@@ -662,7 +718,7 @@ func splitPane(r tmux.Runner, target string, s config.Split, root string, env []
 	args = append(args, env...)
 	if s.Run != "" {
 		// "--" so a command starting with "-" isn't read as more tmux flags.
-		args = append(args, "--", s.Run)
+		args = append(args, "--", startupWaitCommand)
 	}
 	out, err := r.Run(args...)
 	if err != nil {
@@ -745,7 +801,21 @@ type keySend struct {
 // land. It is also slightly *safer* than typing as we go: the shells have had
 // longer to start by the time anything is sent.
 type keyBatch struct {
-	sends []keySend
+	sends        []keySend
+	processes    map[string][]string
+	processOrder []string
+}
+
+func (k *keyBatch) launch(pane, root string, env map[string]string, command string) {
+	if k.processes == nil {
+		k.processes = make(map[string][]string)
+	}
+	if _, exists := k.processes[pane]; !exists {
+		k.processOrder = append(k.processOrder, pane)
+	}
+	args := []string{"respawn-pane", "-k", "-t", pane, "-c", root}
+	args = append(args, envArgs(env)...)
+	k.processes[pane] = append(args, "--", command)
 }
 
 // add queues a command. Commands starting with "#" are comments and are
@@ -760,6 +830,20 @@ func (k *keyBatch) add(target, command string) {
 // flush issues everything queued and warns about whatever failed, one warning
 // per command rather than one per tmux call.
 func (k *keyBatch) flush(r tmux.Runner, stderr io.Writer) {
+	for _, pane := range k.processOrder {
+		if out, err := r.Run(k.processes[pane]...); err != nil {
+			warnf(stderr, "starting process in %s: %v", pane, tmux.CmdErr(err, out))
+		}
+	}
+	// No typed setup may land in a direct process, even when a container
+	// higher in the tree contributed a command for the same physical pane.
+	sends := k.sends[:0]
+	for _, s := range k.sends {
+		if _, direct := k.processes[s.target]; !direct {
+			sends = append(sends, s)
+		}
+	}
+	k.sends = sends
 	if len(k.sends) == 0 {
 		return
 	}
