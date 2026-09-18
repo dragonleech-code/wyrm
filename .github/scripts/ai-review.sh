@@ -1,16 +1,19 @@
 #!/usr/bin/env bash
-# Ask an LLM (via OpenRouter) for a quick review of a PR diff and post it as a
-# single PR comment, edited in place on later runs.
+# Ask an LLM for a quick review of a PR diff and post it as a single PR
+# comment, edited in place on later runs.
 #
 # Deliberately shallow: the goal is catching obvious bugs cheaply, not
-# replacing human review. OpenRouter is used so the model is a variable, not a
-# code change — any OpenRouter model ID works (openai/..., google/...,
-# moonshotai/..., anthropic/...).
+# replacing human review. Any OpenAI-compatible chat completions API works, so
+# the provider and model are settings, not code:
+#   OpenRouter (default)  https://openrouter.ai/api/v1                       model e.g. openai/gpt-5.4-mini
+#   Gemini                https://generativelanguage.googleapis.com/v1beta/openai   model e.g. gemini-3.8-flash
+#   OpenAI                https://api.openai.com/v1                          model e.g. gpt-5.4-mini
 #
-# Required env: OPENROUTER_API_KEY, GH_TOKEN, PR_NUMBER, GITHUB_REPOSITORY
+# Required env: AI_REVIEW_API_KEY, GH_TOKEN, PR_NUMBER, GITHUB_REPOSITORY
 # Optional env:
-#   AI_REVIEW_MODEL    OpenRouter model ID (default openai/gpt-5.4-mini)
-#   AI_REVIEW_EFFORT   reasoning effort: minimal|low|medium|high, or "none" to
+#   AI_REVIEW_BASE_URL API base URL (default OpenRouter)
+#   AI_REVIEW_MODEL    model ID for that provider (default openai/gpt-5.4-mini)
+#   AI_REVIEW_EFFORT   reasoning_effort: minimal|low|medium|high, or "none" to
 #                      omit the parameter (default low). Reasoning tokens bill
 #                      as output, so this is the main cost knob.
 #   MAX_DIFF_BYTES     skip the review above this size (default 200000)
@@ -21,37 +24,39 @@ set -euo pipefail
 
 : "${PR_NUMBER:?PR_NUMBER is required}"
 : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
+base_url="${AI_REVIEW_BASE_URL:-https://openrouter.ai/api/v1}"
+base_url="${base_url%/}"
+api_url="${base_url}/chat/completions"
+host="${base_url#*://}"
+host="${host%%/*}"
 model="${AI_REVIEW_MODEL:-openai/gpt-5.4-mini}"
 effort="${AI_REVIEW_EFFORT:-low}"
 max_bytes="${MAX_DIFF_BYTES:-200000}"
 exclude="${EXCLUDE_REGEX:-(^|/)(go\.sum|vendor/.*|.*\.lock|package-lock\.json)$}"
 context_file="${CONTEXT_FILE:-CLAUDE.md}"
-api_url="${OPENROUTER_URL:-https://openrouter.ai/api/v1/chat/completions}"
 
 # Tolerate a secret pasted with surrounding whitespace or as a full "Bearer ..."
-# header value; either one reaches OpenRouter as "Missing Authentication header".
-key="${OPENROUTER_API_KEY:-}"
+# header value.
+key="${AI_REVIEW_API_KEY:-}"
 key="${key#"${key%%[![:space:]]*}"}"
 key="${key%"${key##*[![:space:]]}"}"
 key="${key#Bearer }"
-OPENROUTER_API_KEY="$key"
 
-# Forks don't receive secrets; that is expected, not a failure.
-if [ -z "${OPENROUTER_API_KEY:-}" ]; then
-  echo "::notice::OPENROUTER_API_KEY not available (fork PR or unset secret); skipping AI review"
+if [ -z "$key" ]; then
+  echo "::notice::AI_REVIEW_API_KEY not available (unset secret); skipping AI review"
   exit 0
 fi
 
 # OpenRouter answers any malformed key with "Missing Authentication header",
 # which sends you looking at the request instead of the secret. Describe the
-# key's shape (never its value) so a bad paste is diagnosable from the log.
-if ! [[ "$OPENROUTER_API_KEY" =~ ^sk-or-[A-Za-z0-9_-]+$ ]]; then
-  shape="length ${#OPENROUTER_API_KEY}"
-  [[ "$OPENROUTER_API_KEY" == sk-or-* ]] || shape+=", does not start with sk-or-"
-  [[ "$OPENROUTER_API_KEY" == *[\"\']* ]] && shape+=", contains quotes"
-  [[ "$OPENROUTER_API_KEY" == *=* ]] && shape+=", contains '='"
-  [[ "$OPENROUTER_API_KEY" == *[[:space:]]* ]] && shape+=", contains whitespace"
-  echo "::error::OPENROUTER_API_KEY doesn't look like an OpenRouter key (${shape}). Re-set it to just the sk-or-... value: gh secret set OPENROUTER_API_KEY"
+# key's shape (never its value) so a key for the wrong provider is obvious.
+if [[ "$host" == openrouter.ai ]] && ! [[ "$key" =~ ^sk-or-[A-Za-z0-9_-]+$ ]]; then
+  shape="length ${#key}"
+  [[ "$key" == sk-or-* ]] || shape+=", does not start with sk-or-"
+  [[ "$key" == *[\"\']* ]] && shape+=", contains quotes"
+  [[ "$key" == *=* ]] && shape+=", contains '='"
+  [[ "$key" == *[[:space:]]* ]] && shape+=", contains whitespace"
+  echo "::error::The API key doesn't look like an OpenRouter key (${shape}). Use an sk-or-... key, or point AI_REVIEW_BASE_URL at the provider the key belongs to."
   exit 1
 fi
 
@@ -118,19 +123,19 @@ jq -n \
        {role: "user", content: $user}
      ]
    }
-   + (if $effort == "none" then {} else {reasoning: {effort: $effort}} end)' \
+   + (if $effort == "none" then {} else {reasoning_effort: $effort} end)' \
   >"$work/request.json"
 
 http_code=$(curl -sS -o "$work/response.json" -w '%{http_code}' \
   --max-time 300 \
-  -H "Authorization: Bearer ${OPENROUTER_API_KEY}" \
+  -H "Authorization: Bearer ${key}" \
   -H "Content-Type: application/json" \
   -H "X-Title: ${GITHUB_REPOSITORY} AI review" \
   --data-binary "@$work/request.json" \
   "$api_url")
 
 if [ "$http_code" != "200" ] || jq -e '.error' "$work/response.json" >/dev/null; then
-  echo "::error::OpenRouter request failed (HTTP ${http_code}): $(jq -r '.error.message // .' "$work/response.json")"
+  echo "::error::Request to ${host} failed (HTTP ${http_code}): $(jq -r '.error.message // .' "$work/response.json")"
   exit 1
 fi
 
@@ -155,7 +160,7 @@ body="${marker}
 ${review}
 
 ---
-<sub>Automated first-pass review via OpenRouter · effort: ${effort} · ${usage}. It can be wrong; treat it as a hint, not a verdict.</sub>"
+<sub>Automated first-pass review via ${host} · effort: ${effort} · ${usage}. It can be wrong; treat it as a hint, not a verdict.</sub>"
 
 if [ "${DRY_RUN:-0}" = "1" ]; then
   printf '%s\n' "$body"
