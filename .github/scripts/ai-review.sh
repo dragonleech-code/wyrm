@@ -42,6 +42,19 @@ if [ -z "${OPENROUTER_API_KEY:-}" ]; then
   exit 0
 fi
 
+# OpenRouter answers any malformed key with "Missing Authentication header",
+# which sends you looking at the request instead of the secret. Describe the
+# key's shape (never its value) so a bad paste is diagnosable from the log.
+if ! [[ "$OPENROUTER_API_KEY" =~ ^sk-or-[A-Za-z0-9_-]+$ ]]; then
+  shape="length ${#OPENROUTER_API_KEY}"
+  [[ "$OPENROUTER_API_KEY" == sk-or-* ]] || shape+=", does not start with sk-or-"
+  [[ "$OPENROUTER_API_KEY" == *[\"\']* ]] && shape+=", contains quotes"
+  [[ "$OPENROUTER_API_KEY" == *=* ]] && shape+=", contains '='"
+  [[ "$OPENROUTER_API_KEY" == *[[:space:]]* ]] && shape+=", contains whitespace"
+  echo "::error::OPENROUTER_API_KEY doesn't look like an OpenRouter key (${shape}). Re-set it to just the sk-or-... value: gh secret set OPENROUTER_API_KEY"
+  exit 1
+fi
+
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
