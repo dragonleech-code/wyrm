@@ -1,0 +1,57 @@
+name: AI review
+
+# A cheap first-pass review from an LLM via OpenRouter. Configure with:
+#   secret   OPENROUTER_API_KEY
+#   variable AI_REVIEW_MODEL   any OpenRouter model ID (default openai/gpt-5.4-mini)
+#   variable AI_REVIEW_EFFORT  minimal|low|medium|high|none (default low)
+# Run it by hand (Actions -> AI review -> Run workflow) to try another model on
+# an existing PR; each model gets its own comment.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: PR number to review
+        required: true
+      model:
+        description: OpenRouter model ID (blank = AI_REVIEW_MODEL)
+        required: false
+      effort:
+        description: Reasoning effort (blank = AI_REVIEW_EFFORT)
+        required: false
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: ai-review-${{ github.event.pull_request.number || inputs.pr_number }}-${{ inputs.model || 'default' }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (!github.event.pull_request.draft && github.actor != 'dependabot[bot]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # Only the script and the project notes: the PR's code is read as a diff
+      # through the API and never checked out or executed.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          sparse-checkout: |
+            .github/scripts/ai-review.sh
+            CLAUDE.md
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: Review
+        run: ./.github/scripts/ai-review.sh
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+          AI_REVIEW_MODEL: ${{ inputs.model || vars.AI_REVIEW_MODEL }}
+          AI_REVIEW_EFFORT: ${{ inputs.effort || vars.AI_REVIEW_EFFORT }}
