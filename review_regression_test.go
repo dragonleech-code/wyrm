@@ -174,6 +174,19 @@ func TestReviewSynchronizedStartup(t *testing.T) {
 			if out, err := r.Run("show-options", "-w", "-A", "-v", "-t", wins[0].ID, "synchronize-panes"); err != nil || out != "on" {
 				t.Fatalf("sync not restored: %q %v", out, err)
 			}
+			if inherited {
+				// Restored by unsetting, so the window still follows the global
+				// setting instead of carrying its own copy of it.
+				if out, err := r.Run("show-options", "-w", "-v", "-t", wins[0].ID, "synchronize-panes"); err != nil || out != "" {
+					t.Fatalf("inherited sync pinned onto the window: %q %v", out, err)
+				}
+				if _, err := r.Run("set-window-option", "-g", "synchronize-panes", "off"); err != nil {
+					t.Fatal(err)
+				}
+				if out, err := r.Run("show-options", "-w", "-A", "-v", "-t", wins[0].ID, "synchronize-panes"); err != nil || out != "off" {
+					t.Fatalf("global change did not reach the window: %q %v", out, err)
+				}
+			}
 		})
 	}
 }

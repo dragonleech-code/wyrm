@@ -286,6 +286,39 @@ func TestDiscoverProjectsWildcardYieldsToOwnConfig(t *testing.T) {
 	}
 }
 
+// TestDiscoverWildcardProjectsOwnConfigKeepsRoot covers a matched directory
+// with its own config, discovered from elsewhere: its config wins over the
+// template, but it is still a directory the pattern matched, so Root is set
+// like its template-built siblings' — the TUI's zoxide tracking keys on it.
+func TestDiscoverWildcardProjectsOwnConfigKeepsRoot(t *testing.T) {
+	base := t.TempDir()
+	template := filepath.Join(t.TempDir(), "tmpl.wyrm.toml")
+	if err := os.WriteFile(template, []byte("[[windows]]\nname = \"w\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	own := filepath.Join(base, "mine")
+	if err := os.MkdirAll(own, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := "[session]\nname = \"mine\"\nroot = \".\"\n[[windows]]\nname = \"w\"\n"
+	if err := os.WriteFile(filepath.Join(own, DefaultFileName), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	settings := &Settings{Wildcard: []Wildcard{{Pattern: filepath.Join(base, "*"), Config: template}}}
+	got := DiscoverWildcardProjects(settings)
+	if len(got) != 1 {
+		t.Fatalf("got %d projects, want 1: %+v", len(got), got)
+	}
+	p := got[0]
+	if p.Wildcard || p.Path != filepath.Join(own, DefaultFileName) {
+		t.Errorf("project = %+v, want its own config, not the template", p)
+	}
+	if p.Root != own {
+		t.Errorf("Root = %q, want %q", p.Root, own)
+	}
+}
+
 // TestFindProjectAliasResolvesAfterExactName covers both halves of the
 // documented rule: an alias resolves a project, and an exact project name
 // always wins over an alias collision.

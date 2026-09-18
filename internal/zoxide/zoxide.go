@@ -12,10 +12,11 @@ package zoxide
 
 import (
 	"fmt"
-	"github.com/jskoll/wyrm/internal/process"
 	"os/exec"
 	"strconv"
 	"strings"
+
+	"github.com/jskoll/wyrm/internal/process"
 )
 
 // Entry is one directory zoxide knows about, with its frecency score

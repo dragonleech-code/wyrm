@@ -2,12 +2,13 @@ package agent
 
 import (
 	"fmt"
-	"github.com/jskoll/wyrm/internal/process"
 	"io"
 	"os"
 	"os/exec"
 	"runtime"
 	"strings"
+
+	"github.com/jskoll/wyrm/internal/process"
 )
 
 // Notification holds the data for an agent state transition alert.

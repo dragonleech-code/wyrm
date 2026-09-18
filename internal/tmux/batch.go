@@ -4,8 +4,9 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	"github.com/jskoll/wyrm/internal/process"
 	"strings"
+
+	"github.com/jskoll/wyrm/internal/process"
 )
 
 // BatchRunner is implemented by a Runner that can issue several tmux commands

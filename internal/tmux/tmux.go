@@ -4,10 +4,11 @@ package tmux
 import (
 	"errors"
 	"fmt"
-	"github.com/jskoll/wyrm/internal/process"
 	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/jskoll/wyrm/internal/process"
 )
 
 // Runner executes a tmux command and returns its combined output, trimmed.

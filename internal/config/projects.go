@@ -26,9 +26,11 @@ type Project struct {
 	// Wildcard project — a template shared by many directories has no single
 	// alias to give any one of them.
 	Aliases []string
-	// Root is the matched directory for a Wildcard project (absolute) and
-	// empty otherwise. When set, it overrides the template config's own
-	// session.root — see DiscoverWildcardProjects.
+	// Root is the matched directory for a project a [[wildcard]] pattern
+	// found (absolute) — whether it builds from the template or from that
+	// directory's own config — and empty otherwise. Only for a Wildcard
+	// project does it override the config's own session.root — see
+	// DiscoverWildcardProjects and LoadConfig.
 	Root string
 	// Wildcard is true for a project synthesized from a [[wildcard]] pattern
 	// match rather than discovered as its own file. Many Wildcard projects
@@ -199,7 +201,7 @@ func DiscoverWildcardProjects(settings *Settings) []Project {
 				}
 			}
 			if local != "" {
-				p := Project{Name: filepath.Base(dir), Path: local}
+				p := Project{Name: filepath.Base(dir), Path: local, Root: dir}
 				if cfg, err := Load(local); err == nil {
 					p.Name = projectNameFrom(cfg, local, false)
 					p.Aliases = cfg.Session.Aliases

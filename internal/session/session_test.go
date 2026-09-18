@@ -47,6 +47,9 @@ type fakeRunner struct {
 	// listPanesOutput backs "list-panes", keyed by the -t target (a window ID
 	// such as "@2"), in the "%id|index|active|command" format ListPanes parses.
 	listPanesOutput map[string]string
+	// windowSync backs "show-options ... synchronize-panes": the window's own
+	// value, empty meaning it has none and inherits the global one.
+	windowSync string
 }
 
 func (f *fakeRunner) Run(args ...string) (string, error) {
@@ -91,6 +94,8 @@ func (f *fakeRunner) Run(args ...string) (string, error) {
 		return f.listWindowsOutput, nil
 	case "list-panes":
 		return f.listPanesOutput[args[2]], nil
+	case "show-options":
+		return f.windowSync, nil
 	}
 	return "", nil
 }
@@ -155,7 +160,9 @@ func TestCreateSplitTree(t *testing.T) {
 		// tmux doesn't always name a session what was asked for, so the real
 		// name is queried separately from the IDs above — see tmux.SessionName.
 		"display-message -p -t $1 -F #{session_name}",
-		"show-options -w -A -v -t @1 synchronize-panes",
+		// only the window's own value (no -A), so an inherited one is
+		// restored by unsetting rather than pinned onto the window
+		"show-options -w -v -t @1 synchronize-panes",
 		"set-window-option -t @1 synchronize-panes off",
 		// second entry splits the initial pane %1 -> %2 (breadth first)
 		"split-window -d -t %1 -h -P -F #{pane_id} -c /tmp/proj -l 30%",
@@ -174,6 +181,8 @@ func TestCreateSplitTree(t *testing.T) {
 		"send-keys -t %3 Enter",
 		"send-keys -t %3 -l -- npm test",
 		"send-keys -t %3 Enter",
+		// the window had no synchronize-panes of its own: unset, not "off"
+		"set-window-option -u -t @1 synchronize-panes",
 		// no startup_window: land on the first window explicitly
 		"select-window -t @1",
 	}
@@ -1458,6 +1467,54 @@ func (p *partialBatchRunner) RunBatch(cmds [][]string) ([]string, error) {
 }
 
 func (p *partialBatchRunner) typed() []string { return p.sent }
+
+// TestCreateRestoresSynchronizePanes covers how synchronize-panes is put back
+// after startup typing, which runs with it off. A window with no value of its
+// own must be unset rather than given an explicit copy of the global value, or
+// later changes to the global setting would no longer reach it.
+func TestCreateRestoresSynchronizePanes(t *testing.T) {
+	on, off := true, false
+	tests := []struct {
+		name    string
+		own     string // the window's own value before startup
+		setting *bool  // the config's synchronize
+		want    string
+	}{
+		{"inherited", "", nil, "set-window-option -u -t @1 synchronize-panes"},
+		{"own value kept", "on", nil, "set-window-option -t @1 synchronize-panes on"},
+		{"config on", "", &on, "set-window-option -t @1 synchronize-panes on"},
+		{"config off", "on", &off, "set-window-option -t @1 synchronize-panes off"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.Config{
+				Session: config.Session{Name: "proj", Root: "/tmp/proj"},
+				Windows: []config.Window{{Name: "w", Synchronize: tt.setting, Splits: []config.Split{{Command: "ls"}}}},
+			}
+			r := &fakeRunner{windowSync: tt.own}
+			var stdout, stderr bytes.Buffer
+			if _, _, _, err := Create(r, cfg, &stdout, &stderr); err != nil {
+				t.Fatalf("Create: %v", err)
+			}
+			got := r.joined()
+			typed := -1
+			for i, c := range got {
+				if c == "send-keys -t %1 Enter" {
+					typed = i
+				}
+			}
+			var restores []int
+			for i, c := range got {
+				if strings.Contains(c, "synchronize-panes") && i > typed {
+					restores = append(restores, i)
+				}
+			}
+			if typed < 0 || len(restores) != 1 || got[restores[0]] != tt.want {
+				t.Fatalf("want exactly %q after startup typing, calls:\n%s", tt.want, strings.Join(got, "\n"))
+			}
+		})
+	}
+}
 
 func TestCreateSynchronizeRemainOnExitZoomed(t *testing.T) {
 	tTrue := true

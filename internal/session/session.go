@@ -202,8 +202,11 @@ func Create(r tmux.Runner, cfg *config.Config, stdout, stderr io.Writer, opts ..
 		}
 		windowIDs[i] = windowID
 		// send-keys obeys synchronize-panes, including an inherited global
-		// setting. Temporarily disable it throughout initialization.
-		out, serr := r.Run("show-options", "-w", "-A", "-v", "-t", windowID, "synchronize-panes")
+		// setting. Temporarily disable it throughout initialization. Only the
+		// window's own value is recorded (no -A): an inherited value must be
+		// restored by unsetting, not by copying it onto the window, or a later
+		// change to the global setting would stop reaching this window.
+		out, serr := r.Run("show-options", "-w", "-v", "-t", windowID, "synchronize-panes")
 		if serr != nil {
 			return "", "", false, rollback(r, id, stderr, tmux.CmdErr(serr, out))
 		}
@@ -232,10 +235,12 @@ func Create(r tmux.Runner, cfg *config.Config, stdout, stderr io.Writer, opts ..
 				syncState = "on"
 			}
 		}
-		if syncState == "on" {
-			if out, err := r.Run("set-window-option", "-t", windowIDs[i], "synchronize-panes", "on"); err != nil {
-				warnf(stderr, "restoring synchronize-panes: %v", tmux.CmdErr(err, out))
-			}
+		args := []string{"set-window-option", "-t", windowIDs[i], "synchronize-panes", syncState}
+		if syncState == "" {
+			args = []string{"set-window-option", "-u", "-t", windowIDs[i], "synchronize-panes"}
+		}
+		if out, err := r.Run(args...); err != nil {
+			warnf(stderr, "restoring synchronize-panes: %v", tmux.CmdErr(err, out))
 		}
 	}
 
@@ -658,14 +663,10 @@ func applySplits(r tmux.Runner, basePane string, splits []config.Split, ctx spli
 	// *new* pane, so the loop below never touches basePane — but it is still a
 	// pane of this window, so pre_window still applies to it. At nested levels
 	// basePane is the parent's pane, already in done, so this is a no-op there.
-	// The one exception is a first entry with no type but its own `run`: that
-	// entry's process *is* basePane (see paneProcess), which has no shell to
-	// type pre_window into — typing it would land as literal input to that
-	// process instead of shell setup.
-	baseIsDirectRun := len(splits) > 0 && splits[0].Type == "" && splits[0].Run != ""
-	if !baseIsDirectRun {
-		sendPreWindow(ctx.keys, basePane, ctx.preWindow, ctx.done)
-	}
+	// When basePane instead runs a process directly (a typeless first entry
+	// with `run`, possibly via a chain of typeless children), keyBatch.flush
+	// drops the send, so there is no need to detect that case here.
+	sendPreWindow(ctx.keys, basePane, ctx.preWindow, ctx.done)
 
 	for i, s := range splits {
 		pane := panes[i]
@@ -882,10 +883,10 @@ func (k *keyBatch) flush(r tmux.Runner, stderr io.Writer) {
 const defaultPaneTitleFormat = "#{pane_index}: #{pane_current_command}"
 
 // enablePaneTitles turns on tmux's live pane-border status line for the
-// session, if the config asked for it. It's cosmetic — a failure here
+// window, if the config asked for it. It's cosmetic — a failure here
 // leaves a fully usable session — so it warns and continues rather than
 // aborting the build, same as every other per-pane failure in this package.
-func enablePaneTitles(r tmux.Runner, sessionID string, s config.Session, stderr io.Writer) {
+func enablePaneTitles(r tmux.Runner, windowID string, s config.Session, stderr io.Writer) {
 	if s.EnablePaneTitles == nil || !*s.EnablePaneTitles {
 		return
 	}
@@ -893,7 +894,7 @@ func enablePaneTitles(r tmux.Runner, sessionID string, s config.Session, stderr 
 	if position == "" {
 		position = "top"
 	}
-	if out, err := r.Run("set-option", "-t", sessionID, "pane-border-status", position); err != nil {
+	if out, err := r.Run("set-option", "-t", windowID, "pane-border-status", position); err != nil {
 		warnf(stderr, "failed to enable pane titles: %v", tmux.CmdErr(err, out))
 		return
 	}
@@ -901,7 +902,7 @@ func enablePaneTitles(r tmux.Runner, sessionID string, s config.Session, stderr 
 	if format == "" {
 		format = defaultPaneTitleFormat
 	}
-	if out, err := r.Run("set-option", "-t", sessionID, "pane-border-format", format); err != nil {
+	if out, err := r.Run("set-option", "-t", windowID, "pane-border-format", format); err != nil {
 		warnf(stderr, "failed to set pane title format: %v", tmux.CmdErr(err, out))
 	}
 }

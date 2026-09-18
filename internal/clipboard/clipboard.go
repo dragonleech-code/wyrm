@@ -5,12 +5,13 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"github.com/jskoll/wyrm/internal/process"
 	"io"
 	"os"
 	"os/exec"
 	"runtime"
 	"strings"
+
+	"github.com/jskoll/wyrm/internal/process"
 )
 
 // ErrNoBackend means no clipboard tool was found for this platform. It is a
