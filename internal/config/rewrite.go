@@ -1,78 +1,117 @@
 package config
 
 import (
+	"bytes"
+	"fmt"
 	"path/filepath"
-	"strings"
+	"slices"
+
+	"github.com/pelletier/go-toml/v2/unstable"
 )
 
-// RootNeedsAbsolute reports whether root is a relative path that would
-// resolve against the wrong directory once the config that carries it is
-// stored somewhere other than the project it describes — see CheckSharedRoot
-// and Session.Resolve. An unset root is left alone, matching CheckSharedRoot:
-// some shared configs legitimately set only a name.
+// RootNeedsAbsolute reports whether a root depends on the config's directory.
 func RootNeedsAbsolute(root string) bool {
-	if root == "" || filepath.IsAbs(root) {
-		return false
-	}
-	return !strings.HasPrefix(root, "~") && !strings.Contains(root, "$")
+	expanded, err := ExpandPath(root)
+	return err == nil && !filepath.IsAbs(expanded)
 }
 
-// RewriteSessionRoot returns data with the [session] table's root key set to
-// newRoot — replacing an existing root line, or inserting one right after the
-// [session] header when the table has none — leaving every other line
-// (comments, formatting, unrelated tables) untouched.
-//
-// It exists for migrateConfig: moving a config file into shared storage
-// changes what a relative session.root means, and a full decode/re-encode
-// round trip through the TOML library would silently drop the user's
-// comments while fixing that.
+// RewriteSessionRoot preserves formatting and comments while replacing root.
+// Invalid input is left untouched; migration uses RewriteSessionString's error.
 func RewriteSessionRoot(data []byte, newRoot string) []byte {
-	lines := strings.Split(string(data), "\n")
-	insertAt := -1
-	inSession := false
-	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "[") {
-			if trimmed == "[session]" {
-				inSession = true
-				insertAt = i + 1
-				continue
-			}
-			if inSession {
-				break // left [session] without finding a root key
-			}
-			continue
-		}
-		if !inSession {
-			continue
-		}
-		if isRootKeyLine(trimmed) {
-			lines[i] = "root = " + tomlQuote(newRoot)
-			return []byte(strings.Join(lines, "\n"))
-		}
-	}
-	if insertAt < 0 {
-		// No [session] table found at all — nothing sensible to patch.
+	out, err := RewriteSessionString(data, "root", newRoot)
+	if err != nil {
 		return data
 	}
-	out := make([]string, 0, len(lines)+1)
-	out = append(out, lines[:insertAt]...)
-	out = append(out, "root = "+tomlQuote(newRoot))
-	out = append(out, lines[insertAt:]...)
-	return []byte(strings.Join(out, "\n"))
+	return out
 }
 
-// isRootKeyLine reports whether trimmed (a line with leading/trailing space
-// already stripped) assigns the "root" key, as opposed to some other key that
-// merely starts with "root" (e.g. a hypothetical "root_dir").
-func isRootKeyLine(trimmed string) bool {
-	if strings.HasPrefix(trimmed, "#") {
-		return false
+// RewriteSessionString uses TOML syntax ranges, including quoted/dotted keys,
+// inline tables and multiline values. It changes only the requested value.
+func RewriteSessionString(data []byte, key, value string) ([]byte, error) {
+	var parser unstable.Parser
+	parser.Reset(data)
+	want := "session." + key
+	var table []string
+	start, end, insert := -1, -1, -1
+	inline, inlineNonempty := false, false
+	var visit func(*unstable.Node, []string)
+	visit = func(n *unstable.Node, prefix []string) {
+		parts := slices.Clone(prefix)
+		it := n.Key()
+		for it.Next() {
+			parts = append(parts, string(it.Node().Data))
+		}
+		v := n.Value()
+		if slices.Equal(parts, []string{"session", key}) {
+			if v.Kind != unstable.String {
+				return
+			}
+			start, end = int(v.Raw.Offset), int(v.Raw.Offset+v.Raw.Length)
+		}
+		if v.Kind == unstable.InlineTable {
+			children := v.Children()
+			if slices.Equal(parts, []string{"session"}) {
+				insert, inline = int(v.Raw.Offset)+1, true
+				inlineNonempty = v.Child() != nil
+			}
+			for children.Next() {
+				if children.Node().Kind == unstable.KeyValue {
+					visit(children.Node(), parts)
+				}
+			}
+		}
 	}
-	rest, ok := strings.CutPrefix(trimmed, "root")
-	if !ok {
-		return false
+	for parser.NextExpression() {
+		n := parser.Expression()
+		switch n.Kind {
+		case unstable.Table, unstable.ArrayTable:
+			var parts []string
+			it := n.Key()
+			last := 0
+			for it.Next() {
+				parts = append(parts, string(it.Node().Data))
+				last = int(it.Node().Raw.Offset + it.Node().Raw.Length)
+			}
+			table = parts
+			if n.Kind == unstable.ArrayTable {
+				table = append([]string{"[]"}, table...)
+			}
+			if slices.Equal(table, []string{"session"}) {
+				insert = len(data)
+				if i := bytes.IndexByte(data[last:], '\n'); i >= 0 {
+					insert = last + i + 1
+				}
+			}
+		case unstable.KeyValue:
+			visit(n, table)
+		}
 	}
-	rest = strings.TrimSpace(rest)
-	return strings.HasPrefix(rest, "=")
+	if err := parser.Error(); err != nil {
+		return nil, fmt.Errorf("rewriting session.%s: %w", key, err)
+	}
+	text := tomlQuote(value)
+	if start >= 0 {
+		return splice(data, start, end, text), nil
+	}
+	if insert < 0 {
+		return splice(data, 0, 0, want+" = "+text+"\n"), nil
+	}
+	text = key + " = " + text
+	if inline {
+		if inlineNonempty {
+			text += ", "
+		}
+	} else {
+		if insert > 0 && data[insert-1] != '\n' {
+			text = "\n" + text
+		}
+		text += "\n"
+	}
+	return splice(data, insert, insert, text), nil
+}
+
+func splice(data []byte, start, end int, text string) []byte {
+	out := append([]byte(nil), data[:start]...)
+	out = append(out, text...)
+	return append(out, data[end:]...)
 }

@@ -29,6 +29,7 @@ import (
 // itself can point at any of them regardless of the current storage setting.
 func (a *app) listConfigs(args []string) error {
 	fs := a.newFlagSet("list-configs")
+	names := fs.Bool("names", false, "list project names and aliases instead of config paths")
 	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
@@ -38,6 +39,18 @@ func (a *app) listConfigs(args []string) error {
 	settings, err := config.LoadSettings()
 	if err != nil {
 		return err
+	}
+	if *names {
+		seen := map[string]bool{}
+		for _, p := range config.DiscoverProjects(settings) {
+			for _, name := range append([]string{p.Name}, p.Aliases...) {
+				if !seen[name] {
+					seen[name] = true
+					_, _ = fmt.Fprintln(a.stdout, name)
+				}
+			}
+		}
+		return nil
 	}
 	for _, name := range []string{config.DefaultFileName, config.LegacyFileName} {
 		if _, err := os.Stat(name); err == nil {
@@ -82,10 +95,11 @@ func (a *app) migrateConfig(args []string) error {
 		return fmt.Errorf("no local config to migrate: %w", err)
 	}
 
-	cwd, err := os.Getwd()
+	sourceConfig, err := config.Load(src)
 	if err != nil {
 		return err
 	}
+	cwd := sourceConfig.Dir()
 	dst, err := settings.SharedConfigPath(cwd)
 	if err != nil {
 		return err
@@ -111,30 +125,46 @@ func (a *app) migrateConfig(args []string) error {
 	// absolute directory it already meant — cwd joined with the original
 	// relative root, not cwd alone, which would collapse "backend" into the
 	// project root itself — before the move.
-	var rewrittenRoot string
-	if data, rerr := os.ReadFile(src); rerr == nil {
-		if cfg, _, derr := config.Decode(data); derr == nil && config.RootNeedsAbsolute(cfg.Session.Root) {
-			if abs, aerr := config.ResolveRoot(cwd, cfg.Session.Root); aerr == nil {
-				rewrittenRoot = abs
-			}
-		}
-	}
-
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+	_, resolvedRoot, err := sourceConfig.Session.Resolve(cwd)
+	if err != nil {
 		return err
 	}
-	if rewrittenRoot != "" {
-		data, err := os.ReadFile(src)
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	var rewrittenRoot string
+	if config.RootNeedsAbsolute(sourceConfig.Session.Root) {
+		rewrittenRoot = resolvedRoot
+		data, err = config.RewriteSessionString(data, "root", resolvedRoot)
 		if err != nil {
 			return err
 		}
-		if err := state.AtomicWriteFile(dst, config.RewriteSessionRoot(data, rewrittenRoot), 0o644); err != nil {
-			return err
-		}
-		if err := os.Remove(src); err != nil {
-			return err
-		}
-	} else if err := os.Rename(src, dst); err != nil {
+	}
+	data, err = config.RewriteSessionString(data, "project_dir", cwd)
+	if err != nil {
+		return err
+	}
+	// Check the relocated meaning before writing or deleting anything.
+	migrated, _, err := config.Decode(data)
+	if err != nil {
+		return fmt.Errorf("validating migrated config: %w", err)
+	}
+	if err := migrated.Validate(); err != nil {
+		return err
+	}
+	_, migratedRoot, err := migrated.Session.Resolve(filepath.Dir(dst))
+	if err != nil || !config.SamePath(migratedRoot, resolvedRoot) || migrated.Session.ProjectDir != cwd {
+		return fmt.Errorf("migration would change the project identity or root")
+	}
+	info, err := os.Stat(src)
+	if err != nil {
+		return err
+	}
+	if err := state.AtomicWriteFile(dst, data, info.Mode().Perm()); err != nil {
+		return err
+	}
+	if err := os.Remove(src); err != nil {
 		return err
 	}
 
@@ -142,15 +172,12 @@ func (a *app) migrateConfig(args []string) error {
 	if rewrittenRoot != "" {
 		_, _ = fmt.Fprintf(a.stdout, "note: session.root was relative, rewritten to %s so the session still builds here\n", rewrittenRoot)
 	}
-	// A disambiguated filename becomes the project's name, since a shared
-	// config with no [session].name is named after its file. Say so, rather
-	// than leaving the user to discover it the next time they type `wyrm api`.
+	// Storage collisions do not change the config's resolved session name.
 	if base := filepath.Base(dst); base != filepath.Base(cwd)+config.DefaultFileName {
 		_, _ = fmt.Fprintf(a.stdout,
 			"note: %s already belonged to another project, so this one is stored as %s\n"+
-				"      it is now `wyrm %s` — set [session].name in that file to choose a different name\n",
-			filepath.Base(cwd)+config.DefaultFileName, base,
-			strings.TrimSuffix(base, config.DefaultFileName))
+				"      set a distinct [session].name if the projects would create the same session name\n",
+			filepath.Base(cwd)+config.DefaultFileName, base)
 	}
 	if settings.Storage != config.StorageShared {
 		if settingsPath, err := config.SettingsPath(); err == nil {

@@ -26,7 +26,11 @@ _wyrm_complete() {
             return
             ;;
         -format)
-            COMPREPLY=($(compgen -W "table json toml names" -- "$cur"))
+            if [[ "$cmd" == status ]]; then
+                COMPREPLY=($(compgen -W "text json tmux waybar sketchybar" -- "$cur"))
+            else
+                COMPREPLY=($(compgen -W "table json toml names" -- "$cur"))
+            fi
             return
             ;;
         -template|-t)
@@ -42,7 +46,7 @@ _wyrm_complete() {
         if [[ "$cur" == -* ]]; then
             COMPREPLY=($(compgen -W "-config -h -help -version" -- "$cur"))
         else
-            COMPREPLY=($(compgen -W "$subcommands $(wyrm list -format names 2>/dev/null)" -- "$cur"))
+            COMPREPLY=($(compgen -W "$subcommands $(wyrm list -format names 2>/dev/null) $(wyrm list-configs -names 2>/dev/null)" -- "$cur"))
         fi
         return
     fi
@@ -63,6 +67,7 @@ _wyrm_complete() {
             clone) COMPREPLY=($(compgen -W "-no-start -n -yes -y" -- "$cur")) ;;
             doctor) COMPREPLY=($(compgen -W "-strict" -- "$cur")) ;;
             list) COMPREPLY=($(compgen -W "-format" -- "$cur")) ;;
+            list-configs) COMPREPLY=($(compgen -W "-names" -- "$cur")) ;;
             selfupdate) COMPREPLY=($(compgen -W "-check -version" -- "$cur")) ;;
             *) COMPREPLY=() ;;
         esac

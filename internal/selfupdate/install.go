@@ -24,14 +24,25 @@ func Install(path string, data []byte, mode os.FileMode) error {
 		_ = tmp.Close()
 		return fmt.Errorf("writing %s: %w", tmpPath, err)
 	}
+	if err := tmp.Chmod(mode); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("setting permissions on %s: %w", tmpPath, err)
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("syncing %s: %w", tmpPath, err)
+	}
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("writing %s: %w", tmpPath, err)
 	}
-	if err := os.Chmod(tmpPath, mode); err != nil {
-		return fmt.Errorf("setting permissions on %s: %w", tmpPath, err)
-	}
 	if err := os.Rename(tmpPath, path); err != nil {
 		return fmt.Errorf("replacing %s: %w", path, err)
+	}
+	if dir, err := os.Open(filepath.Dir(path)); err == nil {
+		defer func() { _ = dir.Close() }()
+		if err := dir.Sync(); err != nil {
+			return fmt.Errorf("binary installed, but syncing its directory failed: %w", err)
+		}
 	}
 	return nil
 }

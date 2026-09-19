@@ -193,7 +193,7 @@ func TestIntegrationRunBatch(t *testing.T) {
 		t.Skip("tmux not installed")
 	}
 
-	r := Exec{SocketName: fmt.Sprintf("wyrm-batch-it-%d", os.Getpid())}
+	r := Exec{ConfigFile: os.DevNull, SocketName: fmt.Sprintf("wyrm-batch-it-%d", os.Getpid())}
 	t.Cleanup(func() { _, _ = r.Run("kill-server") })
 	if out, err := r.Run("new-session", "-d", "-s", "b", "-n", "w"); err != nil {
 		t.Fatalf("new-session: %v (%s)", err, out)

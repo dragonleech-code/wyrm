@@ -46,7 +46,7 @@ _wyrm() {
     case "$state" in
         command)
             local -a sessions
-            sessions=(${(f)"$(wyrm list -format names 2>/dev/null)"})
+            sessions=(${(f)"$(wyrm list -format names 2>/dev/null)"} ${(f)"$(wyrm list-configs -names 2>/dev/null)"})
             _describe -t commands 'subcommand' subcommands
             _describe -t sessions 'running session' sessions
             ;;
@@ -134,6 +134,9 @@ _wyrm() {
                     ;;
                 list)
                     _arguments '-format[output format]:format:(table json toml names)'
+                    ;;
+                list-configs)
+                    _arguments '-names[list project names and aliases]'
                     ;;
                 selfupdate)
                     _arguments '-check[report an available update without installing it]' \

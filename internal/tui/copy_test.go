@@ -2,6 +2,7 @@ package tui
 
 import (
 	"errors"
+	tea "github.com/charmbracelet/bubbletea"
 	"strings"
 	"testing"
 
@@ -26,6 +27,16 @@ func fakeClipboard(t *testing.T, err error) *string {
 	return &got
 }
 
+func completeCopy(t *testing.T, m Model) Model {
+	t.Helper()
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	if cmd == nil {
+		t.Fatal("copy did not return an asynchronous command")
+	}
+	next, _ = next.Update(cmd())
+	return next.(Model)
+}
+
 func TestCopyKeyInPanels(t *testing.T) {
 	copied := fakeClipboard(t, nil)
 
@@ -35,7 +46,7 @@ func TestCopyKeyInPanels(t *testing.T) {
 	m.cur[panelSessions] = 0
 	m.focus = panelSessions
 
-	m, _ = update(m, key("y"))
+	m = completeCopy(t, m)
 	if *copied != "my-session" {
 		t.Errorf("copied %q, want the session name", *copied)
 	}
@@ -53,7 +64,7 @@ func TestCopyKeyInPanels(t *testing.T) {
 	m.projects = []Project{{Name: "proj", Path: "/path/to/proj"}}
 	m.cur[panelProjects] = 0
 	m.focus = panelProjects
-	m, _ = update(m, key("y"))
+	m = completeCopy(t, m)
 	if *copied != "/path/to/proj" {
 		t.Errorf("copied %q, want the project path", *copied)
 	}
@@ -65,7 +76,7 @@ func TestCopyKeyInPanels(t *testing.T) {
 	m.windows = []tmux.WindowInfo{{ID: "@1", Name: "code"}}
 	m.cur[panelWindows] = 0
 	m.focus = panelWindows
-	m, _ = update(m, key("y"))
+	m = completeCopy(t, m)
 	if *copied != "code" {
 		t.Errorf("copied %q, want the window name", *copied)
 	}
@@ -86,7 +97,7 @@ func TestCopyReportsMissingBackend(t *testing.T) {
 	m.cur[panelSessions] = 0
 	m.focus = panelSessions
 
-	m, _ = update(m, key("y"))
+	m = completeCopy(t, m)
 	if strings.Contains(m.info, "copied") {
 		t.Errorf("nothing was copied, so nothing should claim it was: %q", m.info)
 	}
@@ -106,7 +117,7 @@ func TestCopyReportsBackendFailure(t *testing.T) {
 	m.cur[panelSessions] = 0
 	m.focus = panelSessions
 
-	m, _ = update(m, key("y"))
+	m = completeCopy(t, m)
 	if !strings.Contains(m.info, "exit status 1") {
 		t.Errorf("want the underlying error surfaced, got %q", m.info)
 	}

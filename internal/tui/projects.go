@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -66,7 +65,7 @@ func listProjects(r tmux.Runner, settings *config.Settings) ([]Project, error) {
 	names := make(map[string]bool, len(discovered))
 	for _, d := range discovered {
 		p := Project{Name: d.Name, Path: d.Path, Shared: d.Shared, Root: d.Root, Wildcard: d.Wildcard}
-		if id, ok := running[d.Name]; ok {
+		if id := runningProjectID(running, d.Name); id != "" {
 			p.Running, p.SessionID = true, id
 		}
 		projects = append(projects, p)
@@ -92,18 +91,28 @@ func appendZoxideProjects(projects []Project, names map[string]bool, running map
 		return projects
 	}
 	for _, e := range entries {
-		name := filepath.Base(e.Path)
+		name, _, err := (config.Session{Root: e.Path}).Resolve("")
+		if err != nil {
+			continue
+		}
 		if name == "" || names[name] {
 			continue
 		}
 		names[name] = true
 		p := Project{Name: name, Root: e.Path, Zoxide: true}
-		if id, ok := running[name]; ok {
+		if id := runningProjectID(running, name); id != "" {
 			p.Running, p.SessionID = true, id
 		}
 		projects = append(projects, p)
 	}
 	return projects
+}
+
+func runningProjectID(running map[string]string, name string) string {
+	if id := running[name]; id != "" {
+		return id
+	}
+	return running[tmux.SanitizeName(name)]
 }
 
 // --- messages ---

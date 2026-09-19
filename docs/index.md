@@ -212,6 +212,9 @@ local file (if present) and every config in the shared directory (see the
 `storage` setting. It exists mainly to back shell completion for `-config`,
 but works standalone too.
 
+`wyrm list-configs -names` lists discoverable project names and aliases,
+including stopped projects. Shell completion combines these with live sessions.
+
 ## Picking a running session
 
 `wyrm pick` opens an interactive, fuzzy list of the tmux sessions currently
@@ -409,7 +412,7 @@ break your whole tmux config with no indication of which line did it —
 `wyrm status` reports what the AI agents running in your panes are doing —
 across every session, not just the one you're attached to — for a status bar or
 a script. It's the same detection the TUI's markers use — see
-[`[[tui.agent.profiles]]`](configuration.md#tuiagentprofiles--describing-another-agent)
+[`[[tui.agent.profiles]]`](configuration.md#tuiagentprofiles-describing-another-agent)
 for teaching it about another agent — without the interactive UI:
 
 ```sh

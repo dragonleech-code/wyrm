@@ -555,6 +555,10 @@ func SharedConfigOwner(path string) (string, bool) {
 	if err != nil || cfg == nil {
 		return "", false
 	}
+	if cfg.Session.ProjectDir != "" {
+		dir, err := ExpandPath(cfg.Session.ProjectDir)
+		return dir, err == nil && filepath.IsAbs(dir)
+	}
 	root := cfg.Session.Root
 	if root == "" {
 		return "", false

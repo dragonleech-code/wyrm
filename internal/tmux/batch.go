@@ -4,8 +4,9 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	"os/exec"
 	"strings"
+
+	"github.com/jskoll/wyrm/internal/process"
 )
 
 // BatchRunner is implemented by a Runner that can issue several tmux commands
@@ -57,6 +58,9 @@ func (e Exec) RunBatch(cmds [][]string) ([]string, error) {
 	if e.SocketName != "" {
 		args = append(args, "-L", e.SocketName)
 	}
+	if e.ConfigFile != "" {
+		args = append(args, "-f", e.ConfigFile)
+	}
 	for i, c := range cmds {
 		if i > 0 {
 			args = append(args, batchSep)
@@ -67,7 +71,8 @@ func (e Exec) RunBatch(cmds [][]string) ([]string, error) {
 		args = append(args, batchSep, "display-message", "-p", marker)
 	}
 
-	cmd := exec.Command(e.bin(), args...)
+	cmd, cancel := process.Command(e.bin(), args...)
+	defer cancel()
 	var stdout, stderr strings.Builder
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	runErr := cmd.Run()

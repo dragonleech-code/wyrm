@@ -43,6 +43,8 @@ complete -c wyrm -n "not __fish_seen_subcommand_from $subcommands" -a version -d
 complete -c wyrm -n "not __fish_seen_subcommand_from $subcommands" -a help -d 'show help'
 # ...and running session names (bare `wyrm <name>` attaches by name).
 complete -c wyrm -n "not __fish_seen_subcommand_from $subcommands" -a '(wyrm list -format names 2>/dev/null)' -d 'running session'
+complete -c wyrm -n "not __fish_seen_subcommand_from $subcommands" -a '(wyrm list-configs -names 2>/dev/null)' -d 'project or alias'
+complete -c wyrm -n '__fish_seen_subcommand_from list-configs' -o names -d 'project names and aliases'
 
 # Subcommand flags.
 complete -c wyrm -n '__fish_seen_subcommand_from up restart kill edit validate' -o config -d 'config file path' -r -a '(wyrm list-configs 2>/dev/null)'
