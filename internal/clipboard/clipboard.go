@@ -10,6 +10,8 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+
+	"github.com/jskoll/wyrm/internal/process"
 )
 
 // ErrNoBackend means no clipboard tool was found for this platform. It is a
@@ -107,7 +109,8 @@ var writeSystemClipboard = func(text string) error {
 	if err != nil {
 		return err
 	}
-	cmd := exec.Command(name, args...)
+	cmd, cancel := process.Command(name, args...)
+	defer cancel()
 	cmd.Stdin = strings.NewReader(text)
 	return cmd.Run()
 }

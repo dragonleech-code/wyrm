@@ -163,6 +163,9 @@ local file (if present) and every config in the shared directory (see
 below) — regardless of the current `storage` setting. It exists mainly to
 back shell completion for `-config`, but works standalone too.
 
+`wyrm list-configs -names` lists discoverable project names and aliases,
+including stopped projects. Shell completion combines these with live sessions.
+
 ## Storing configs in a shared directory
 
 By default wyrm looks for `.wyrm.toml` in the current directory. If you'd
@@ -180,18 +183,19 @@ In shared mode, running `wyrm` in a directory named `myproject` looks for
 `myproject.wyrm.toml` in the shared directory first, falling back to the
 usual local search if it isn't there. `wyrm migrate-config` moves the
 current directory's local config into the shared directory under the right
-name for you.
+name for you. When invoked from a child directory, migration preserves the
+discovered config's original project directory. It records `session.project_dir`
+as ownership metadata and anchors relative roots before moving the file.
 
 Two projects can share a folder name — `~/work/api` and `~/personal/api`, or
 `services/api` and `packages/api` in a monorepo. The first one to claim
 `api.wyrm.toml` keeps it; the next gets a distinct file with a short hash of
 its path, `api-3f2a1c.wyrm.toml`, and `migrate-config` tells you when that
-happens. A shared config belongs to whichever directory its absolute
-`session.root` points at, so wyrm never hands one project another's config.
+happens. A shared config belongs to `session.project_dir` when present,
+otherwise to its absolute `session.root`.
 
-Because the filename is also the project's name when the config sets no
-`[session].name`, that second project starts as `wyrm api-3f2a1c`. Set a name
-explicitly to choose your own:
+The storage filename does not rename the session: its name comes from
+`session.name` or the resolved root. Set distinct names for same-named roots:
 
 ```toml
 [session]
@@ -560,6 +564,10 @@ environment. See
 [`docs/configuration.md`](https://github.com/jskoll/wyrm/blob/main/docs/configuration.md#tuiagentnotify--being-told-when-an-agent-needs-you)
 for the full table.
 
+Terminal notifications are serialized with the TUI renderer. Clipboard,
+notification, zoxide, and non-interactive tmux helpers have a ten-second
+deadline; interactive attachment, editors, and lifecycle hooks are not limited.
+
 Because it reads what's on screen, an agent displaying a *screenshot* of a
 prompt — reviewing a diff of prompt-handling code, say — can be misread. The
 detector only matches the agent's own prompt chrome, never prose, which keeps
@@ -808,6 +816,7 @@ session instead of nesting one tmux inside another.
 |---|---|---|---|
 | `name` | string | basename of `root` | tmux session name |
 | `root` | string | `.` | Working directory for every window; `$VAR` is expanded |
+| `project_dir` | string | — | Original project directory recorded by migration for shared-config ownership; independent of `root` |
 | `on_project_start` | string | — | Shell command run (via your $SHELL, or sh, in `root`) before the session is created |
 | `on_project_exit` | string | — | Shell command run before `wyrm kill` destroys the session |
 | `on_project_attach` | string | — | Shell command run every time you attach to the session (fresh build or reattach) |
@@ -824,6 +833,11 @@ session instead of nesting one tmux inside another.
 At least one of `name` / `root` is required.
 
 ### `[[windows]]`
+
+Startup commands run with pane synchronization temporarily disabled; the
+configured or inherited setting is then restored. Direct `run` processes start
+after pane options are installed, so `remain_on_exit` also catches fast exits.
+Leading typeless children reuse their parent's pane with their own root and env.
 
 | Key | Type | Default | Description |
 |---|---|---|---|

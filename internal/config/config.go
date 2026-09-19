@@ -54,8 +54,11 @@ func (c *Config) Warnings() []string { return c.warnings }
 
 // Session describes the tmux session and its lifecycle hooks.
 type Session struct {
-	Name            string `toml:"name,omitempty"`
-	Root            string `toml:"root,omitempty"`
+	Name string `toml:"name,omitempty"`
+	Root string `toml:"root,omitempty"`
+	// ProjectDir records where a migrated shared config was discovered. Its
+	// session root may be a subdirectory, so root alone is not its owner.
+	ProjectDir      string `toml:"project_dir,omitempty"`
 	OnProjectStart  string `toml:"on_project_start,omitempty"`
 	OnProjectExit   string `toml:"on_project_exit,omitempty"`
 	OnProjectAttach string `toml:"on_project_attach,omitempty"`

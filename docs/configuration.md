@@ -17,12 +17,18 @@ directory's basename) inside `shared_dir` first, falling back to the normal
 local search if it's missing. Run `wyrm migrate-config` to move an existing
 local config into the shared directory under the right name.
 
+Migration preserves the discovered config's own directory even when invoked
+from a child directory. It anchors relative roots and records `session.project_dir`
+as ownership metadata, so a root such as `backend` remains discoverable from
+the original project directory. Comments and TOML key spellings are preserved.
+
 ### When two projects share a folder name
 
 Basenames collide: `~/work/api` and `~/personal/api` both want
 `api.wyrm.toml`, and so do `services/api` and `packages/api` in a monorepo.
 
-A shared config belongs to the directory its absolute `session.root` names.
+A shared config belongs to `session.project_dir` when present, otherwise to
+the directory its absolute `session.root` names.
 The first project to claim a basename keeps the plain filename; any other
 project with that basename gets `<folder>-<hash>.wyrm.toml`, where the hash is
 eight characters of its absolute path — stable, so a project always resolves to
@@ -34,8 +40,8 @@ has. A config with no `session.root`, or a relative one, identifies no
 particular project, so it is treated as belonging to whoever is asking — which
 is how configs written before this worked, and continue to work.
 
-Since a shared config with no `[session].name` is named after its file, the
-disambiguated project starts as `wyrm api-3f2a1c`. Set a name to pick your own:
+The storage filename does not rename the session: its name comes from
+`session.name` or the resolved root. Set distinct names for same-named roots:
 
 ```toml
 [session]
@@ -231,6 +237,10 @@ enabled = true          # nothing is delivered until this is on
 `bell` and `osc` are written to the terminal, so they only apply while
 `wyrm tui` is running. `desktop` and `command` work regardless.
 
+Terminal writes are serialized with the TUI renderer. Notification and
+clipboard helpers, zoxide, and non-interactive tmux commands time out after
+ten seconds. Interactive attachment, editors, and lifecycle hooks are not limited.
+
 `command` **replaces** the desktop notification rather than adding to it — if
 you set one, `desktop` is not delivered. The command runs through your `$SHELL`
 with the notification in its environment:
@@ -314,6 +324,7 @@ file uses the same `[session]` / `[[windows]]` format documented below.
 |---|---|---|---|
 | `name` | string | basename of `root` | tmux session name |
 | `root` | string | `.` | Default working directory for every window and pane; `~` and `$VAR` are expanded |
+| `project_dir` | string | — | Original project directory recorded by migration for shared-config ownership; independent of `root` |
 | `on_project_start` | string | — | Shell command run (via your $SHELL, or sh, in `root`) before the session is created |
 | `on_project_exit` | string | — | Shell command run before `wyrm kill` destroys the session |
 | `on_project_attach` | string | — | Shell command run every time you attach to the session (fresh build or reattach) |
@@ -407,6 +418,12 @@ would be worth a fresh design conversation — not something to route around
 with a bigger hook.
 
 ## `[[windows]]`
+
+Startup commands are sent with pane synchronization temporarily disabled,
+then the configured or inherited setting is restored. Direct `run` processes
+start after the layout and `remain_on_exit` options are ready, including fast
+commands such as `true`. Leading typeless children reuse their parent's pane;
+their root and environment apply when that physical pane is created.
 
 | Key | Type | Default | Description |
 |---|---|---|---|

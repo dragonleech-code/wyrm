@@ -2,6 +2,7 @@ package tmux
 
 import (
 	"errors"
+	"os"
 	"os/exec"
 	"strings"
 	"testing"
@@ -129,7 +130,7 @@ func TestIntegrationRenameToDashLeadingName(t *testing.T) {
 	}
 
 	const socket = "wyrm-rename-test"
-	r := Exec{SocketName: socket}
+	r := Exec{ConfigFile: os.DevNull, SocketName: socket}
 	t.Cleanup(func() { _, _ = r.Run("kill-server") })
 
 	out, err := r.Run("new-session", "-d", "-P", "-F", "#{session_id}|#{window_id}",

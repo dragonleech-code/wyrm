@@ -30,7 +30,7 @@ func TestIntegration(t *testing.T) {
 		t.Skip("tmux not installed")
 	}
 
-	r := tmux.Exec{SocketName: fmt.Sprintf("wyrm-tui-it-%d", os.Getpid())}
+	r := tmux.Exec{ConfigFile: os.DevNull, SocketName: fmt.Sprintf("wyrm-tui-it-%d", os.Getpid())}
 	t.Cleanup(func() { _, _ = r.Run("kill-server") })
 
 	if out, err := r.Run("new-session", "-d", "-s", "ittui", "-n", "code"); err != nil {
@@ -89,7 +89,7 @@ func TestIntegrationProject(t *testing.T) {
 		t.Skip("tmux not installed")
 	}
 
-	r := tmux.Exec{SocketName: fmt.Sprintf("wyrm-tui-proj-%d", os.Getpid())}
+	r := tmux.Exec{ConfigFile: os.DevNull, SocketName: fmt.Sprintf("wyrm-tui-proj-%d", os.Getpid())}
 	t.Cleanup(func() { _, _ = r.Run("kill-server") })
 
 	dir := t.TempDir()
@@ -141,7 +141,7 @@ func TestIntegrationManagement(t *testing.T) {
 		t.Skip("tmux not installed")
 	}
 
-	r := tmux.Exec{SocketName: fmt.Sprintf("wyrm-tui-mgmt-%d", os.Getpid())}
+	r := tmux.Exec{ConfigFile: os.DevNull, SocketName: fmt.Sprintf("wyrm-tui-mgmt-%d", os.Getpid())}
 	t.Cleanup(func() { _, _ = r.Run("kill-server") })
 
 	if out, err := r.Run("new-session", "-d", "-s", "mgmt", "-n", "first"); err != nil {

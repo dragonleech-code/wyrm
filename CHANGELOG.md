@@ -6,6 +6,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Validate replacement roots before stopping a session; bulk kill/restart now
+  return failure when any requested operation fails.
+- Isolate per-pane startup commands from explicit and inherited synchronization
+  (an inherited `synchronize-panes` stays inherited afterwards), honor nested pane roots/environments/direct commands, and configure
+  `remain_on_exit` before starting fast processes. Apply pane titles to every window.
+- Preserve migration roots and ownership when invoked from a child directory or
+  with a subdirectory root. Rewrite TOML syntax safely and validate before moving.
+- Resolve live sessions without alias hooks from another project; prefer exact
+  numeric window names over window indexes. Include attach hooks in dry runs.
+- Honor wildcard projects' own configs (still tracked in zoxide) and match sanitized and worktree-derived
+  session identities in the TUI. Keep doctor/help/version usable with broken settings.
+- Refuse unlocked or unreadable lifecycle-history writes and sync replacement
+  executables before installation.
+- Run clipboard work asynchronously, bound helper processes, and deliver terminal
+  notifications safely with session/window metadata from the agent scan.
+- Correct Bash status formats; complete stopped projects and aliases through
+  `list-configs -names` in Bash, Fish, and Zsh.
+
+### Changed
+
+- Build documentation strictly on pull requests with pinned Python dependencies;
+  deployment permissions are restricted to the deployment job.
+- Isolate integration-test tmux servers from personal configuration and plugins.
+
 ## [1.2.1] - 2026-09-05
 
 ### Fixed

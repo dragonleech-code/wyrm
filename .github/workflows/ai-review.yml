@@ -1,0 +1,74 @@
+name: AI review
+
+# A cheap first-pass review from an LLM, run on demand only:
+# Actions -> AI review -> Run workflow, or
+#   gh workflow run ai-review.yml -f pr_number=123 [-f model=<model-id>]
+#
+# Manual-only and admin-only on purpose: this is a public repo and every run
+# spends API credit, so neither opening a PR nor having write access (which
+# can dispatch and re-run workflows) is enough to trigger one.
+#
+# Configure with (any OpenAI-compatible provider; see .github/scripts/ai-review.sh):
+#   secret   AI_REVIEW_API_KEY    key for that provider
+#   variable AI_REVIEW_BASE_URL   API base URL (default https://openrouter.ai/api/v1)
+#   variable AI_REVIEW_MODEL      model ID as that provider names it
+#   variable AI_REVIEW_EFFORT     minimal|low|medium|high|none (default low)
+# Each model gets its own PR comment, so several can be compared on one PR.
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: PR number to review
+        required: true
+      model:
+        description: Model ID for the configured provider (blank = AI_REVIEW_MODEL)
+        required: false
+      effort:
+        description: Reasoning effort (blank = AI_REVIEW_EFFORT)
+        required: false
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: ai-review-${{ inputs.pr_number }}-${{ inputs.model || 'default' }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # triggering_actor, not actor: a re-run keeps the original actor but is
+      # started by whoever clicked "Re-run", and that person must be an admin too.
+      - name: Require an admin
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WHO: ${{ github.triggering_actor }}
+        run: |
+          perm=$(gh api "repos/${GITHUB_REPOSITORY}/collaborators/${WHO}/permission" --jq .permission)
+          if [ "$perm" != "admin" ]; then
+            echo "::error::AI review is admin-only; ${WHO} has '${perm}' access"
+            exit 1
+          fi
+      # Only the script and the project notes: the PR's code is read as a diff
+      # through the API and never checked out or executed.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          sparse-checkout: |
+            .github/scripts/ai-review.sh
+            CLAUDE.md
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: Review
+        run: ./.github/scripts/ai-review.sh
+        env:
+          # OPENROUTER_API_KEY is the secret's original name, kept as a fallback.
+          AI_REVIEW_API_KEY: ${{ secrets.AI_REVIEW_API_KEY || secrets.OPENROUTER_API_KEY }}
+          AI_REVIEW_BASE_URL: ${{ vars.AI_REVIEW_BASE_URL }}
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          AI_REVIEW_MODEL: ${{ inputs.model || vars.AI_REVIEW_MODEL }}
+          AI_REVIEW_EFFORT: ${{ inputs.effort || vars.AI_REVIEW_EFFORT }}

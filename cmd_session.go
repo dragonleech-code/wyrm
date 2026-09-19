@@ -25,6 +25,12 @@ import (
 // misrepresent what actually happened. proceed reports whether it's safe to
 // go on to Create.
 func (a *app) killForRestart(cfg *config.Config) (proceed bool, err error) {
+	if err := cfg.Validate(); err != nil {
+		return false, fmt.Errorf("invalid replacement config: %w", err)
+	}
+	if err := session.ValidateRoots(cfg); err != nil {
+		return false, fmt.Errorf("invalid replacement config: %w", err)
+	}
 	name, kerr := session.Kill(a.runner, cfg, a.stderr)
 	if kerr == nil {
 		_, _ = fmt.Fprintf(a.stdout, "killed session %s\n", name)
@@ -96,7 +102,7 @@ func (a *app) up(args []string) error {
 	}
 
 	if *dryRun {
-		return a.dryRunBuild(cfg, hist)
+		return a.dryRunBuild(cfg, hist, !*detach)
 	}
 
 	name, sessionID, created, err := session.Create(a.runner, cfg, a.stdout, a.stderr, session.WithHistory(hist))
@@ -138,13 +144,16 @@ func (a *app) reportCreated(name string, created bool) {
 // the small amount of machinery — session.Create takes a tmux.Runner, so a
 // recording one covers the tmux half, and session.DryRun covers the hooks,
 // which never go through the Runner at all.
-func (a *app) dryRunBuild(cfg *config.Config, hist session.HookHistory) error {
+func (a *app) dryRunBuild(cfg *config.Config, hist session.HookHistory, attach bool) error {
 	a.dryRunHeader(
 		"dry run: no tmux commands are executed, no lifecycle",
 		"hooks are run, and an already-running session is not",
 		"consulted.")
 	dry := tmux.NewDryRun(a.stdout)
 	_, _, _, err := session.Create(dry, cfg, io.Discard, a.stderr, session.DryRun(a.stdout), session.WithHistory(hist))
+	if err == nil && attach {
+		return session.RunAttachHook(cfg, a.stderr, session.DryRun(a.stdout))
+	}
 	return err
 }
 
@@ -224,10 +233,16 @@ func (a *app) restart(args []string) error {
 		// The teardown half consults the real server (see session.Kill's doc),
 		// so a not-running session is reported and only the build is described.
 		if _, kerr := session.Kill(a.runner, cfg, a.stderr, a.teardownDryRun()...); kerr != nil {
+			if !errors.Is(kerr, session.ErrSessionNotRunning) {
+				return kerr
+			}
 			_, _ = fmt.Fprintf(a.stderr, "wyrm: nothing to stop (%v)\n", kerr)
 		}
 		dry := tmux.NewDryRun(a.stdout)
 		_, _, _, err := session.Create(dry, cfg, io.Discard, a.stderr, session.DryRun(a.stdout), session.WithHistory(hist))
+		if err == nil && !*detach {
+			return session.RunAttachHook(cfg, a.stderr, session.DryRun(a.stdout))
+		}
 		return err
 	}
 
@@ -277,9 +292,10 @@ func (a *app) restartAll(settings *config.Settings, dryRun, yes bool, vars map[s
 	// One discovery pass for every session below. FindProject re-runs the
 	// whole scan — wildcard tree walks included — on each call.
 	index := config.NewProjectIndex(settings)
+	var failures []error
 
 	for _, s := range active {
-		project, found := index.Find(s.Name)
+		project, found := index.FindSession(s.Name)
 		if !found {
 			_, _ = fmt.Fprintf(a.stderr, "wyrm: skipping session %q: no project config found\n", s.Name)
 			continue
@@ -287,6 +303,7 @@ func (a *app) restartAll(settings *config.Settings, dryRun, yes bool, vars map[s
 		cfg, err := project.LoadConfig()
 		if err != nil {
 			_, _ = fmt.Fprintf(a.stderr, "wyrm: warning: skipping session %q: %v\n", s.Name, err)
+			failures = append(failures, fmt.Errorf("%s: %w", s.Name, err))
 			continue
 		}
 		if len(vars) > 0 {
@@ -296,29 +313,36 @@ func (a *app) restartAll(settings *config.Settings, dryRun, yes bool, vars map[s
 		if dryRun {
 			_, _ = fmt.Fprintf(a.stdout, "# Restarting session %s (%s)\n", s.Name, project.Path)
 			if _, kerr := session.Kill(a.runner, cfg, a.stderr, opts...); kerr != nil {
+				if !errors.Is(kerr, session.ErrSessionNotRunning) {
+					failures = append(failures, fmt.Errorf("%s: %w", s.Name, kerr))
+					continue
+				}
 				_, _ = fmt.Fprintf(a.stderr, "wyrm: nothing to stop (%v)\n", kerr)
 			}
 			dry := tmux.NewDryRun(a.stdout)
 			_, _, _, err := session.Create(dry, cfg, io.Discard, a.stderr, session.DryRun(a.stdout), session.WithHistory(hist))
 			if err != nil {
 				_, _ = fmt.Fprintf(a.stderr, "wyrm: warning: dry-run create failed for %s: %v\n", s.Name, err)
+				failures = append(failures, fmt.Errorf("%s: %w", s.Name, err))
 			}
 			continue
 		}
 
 		if proceed, kerr := a.killForRestart(cfg); !proceed {
 			_, _ = fmt.Fprintf(a.stderr, "wyrm: warning: skipping session %q: could not stop it: %v\n", s.Name, kerr)
+			failures = append(failures, fmt.Errorf("%s: %w", s.Name, kerr))
 			continue
 		}
 
 		name, _, created, err := session.Create(a.runner, cfg, a.stdout, a.stderr, session.WithHistory(hist))
 		if err != nil {
 			_, _ = fmt.Fprintf(a.stderr, "wyrm: warning: failed to restart session %s: %v\n", s.Name, err)
+			failures = append(failures, fmt.Errorf("%s: %w", s.Name, err))
 			continue
 		}
 		a.reportCreated(name, created)
 	}
-	return nil
+	return errors.Join(failures...)
 }
 
 // kill runs the on_project_exit hook and destroys the session. With a
@@ -411,13 +435,15 @@ func (a *app) killAll(settings *config.Settings, dryRun, yes bool) error {
 	}
 
 	index := config.NewProjectIndex(settings)
+	var failures []error
 
 	for _, s := range active {
-		if project, found := index.Find(s.Name); found {
+		if project, found := index.FindSession(s.Name); found {
 			if cfg, err := project.LoadConfig(); err == nil {
 				name, kerr := session.Kill(a.runner, cfg, a.stderr, opts...)
 				if kerr != nil {
 					_, _ = fmt.Fprintf(a.stderr, "wyrm: warning: failed to kill session %s: %v\n", s.Name, kerr)
+					failures = append(failures, fmt.Errorf("%s: %w", s.Name, kerr))
 				} else if !dryRun {
 					_, _ = fmt.Fprintf(a.stdout, "killed session %s\n", name)
 				}
@@ -430,12 +456,13 @@ func (a *app) killAll(settings *config.Settings, dryRun, yes bool) error {
 		} else {
 			if out, err := a.runner.Run("kill-session", "-t", s.ID); err != nil {
 				_, _ = fmt.Fprintf(a.stderr, "wyrm: warning: failed to kill session %s: %v\n", s.Name, tmux.CmdErr(err, out))
+				failures = append(failures, fmt.Errorf("%s: %w", s.Name, tmux.CmdErr(err, out)))
 			} else {
 				_, _ = fmt.Fprintf(a.stdout, "killed session %s\n", s.Name)
 			}
 		}
 	}
-	return nil
+	return errors.Join(failures...)
 }
 
 func (a *app) killByName(settings *config.Settings, target string, dryRun bool) error {
@@ -531,7 +558,11 @@ func (a *app) attachByName(name string, extraArgs []string) error {
 		return err
 	}
 	if ok {
-		if project, found := config.FindProject(settings, name); found {
+		actualName, nerr := tmux.SessionName(a.runner, id)
+		if nerr != nil {
+			return nerr
+		}
+		if project, found := config.NewProjectIndex(settings).FindSession(actualName); found {
 			if cfg, err := project.LoadConfig(); err == nil {
 				if len(vars) > 0 {
 					cfg.Interpolate(vars)

@@ -464,8 +464,7 @@ func (a *app) checkAgent(d *doctorReport, settings *config.Settings) {
 	d.ok("agent", fmt.Sprintf("%s, watching %s", source, strings.Join(commands, ", ")))
 }
 
-// checkAgentNotify reports the notification channels, and which of them the
-// TUI does not deliver. It is separate from checkAgent so a profile that fails
+// checkAgentNotify reports notification channels. It is separate from checkAgent so a profile that fails
 // to compile does not also hide whatever is wrong with the notifications.
 func (a *app) checkAgentNotify(d *doctorReport, settings *config.Settings) {
 	if !settings.AgentNotifyEnabled() {
@@ -481,28 +480,18 @@ func (a *app) checkAgentNotify(d *doctorReport, settings *config.Settings) {
 	} else if settings.AgentNotifyDesktop() {
 		channels = append(channels, "desktop")
 	}
-	var inTUIOnly []string
 	if settings.AgentNotifyBell() {
-		inTUIOnly = append(inTUIOnly, "bell")
+		channels = append(channels, "bell")
 	}
 	if settings.AgentNotifyOSC() {
-		inTUIOnly = append(inTUIOnly, "osc")
+		channels = append(channels, "osc")
 	}
-	if len(channels) == 0 && len(inTUIOnly) == 0 {
+	if len(channels) == 0 {
 		d.warn("agent notify", "enabled, but every channel is off",
 			"set one of desktop, bell, osc, or command")
 		return
 	}
-	detail := strings.Join(append(append([]string{}, channels...), inTUIOnly...), ", ")
-	if len(inTUIOnly) > 0 {
-		// Not delivered from inside `wyrm tui`: writing escape sequences to
-		// the terminal from a background goroutine corrupts the frame Bubble
-		// Tea is drawing, so those channels are skipped there.
-		d.warn("agent notify", "enabled: "+detail,
-			strings.Join(inTUIOnly, "/")+" write terminal escapes and are not delivered from inside `wyrm tui`; "+
-				"desktop and command are")
-		return
-	}
+	detail := strings.Join(channels, ", ")
 	d.ok("agent notify", "enabled: "+detail)
 }
 

@@ -125,9 +125,15 @@ func resolveSendTarget(r tmux.Runner, target string) (string, error) {
 			targetWin = w
 			break
 		}
-		if idx, err := strconv.Atoi(winName); err == nil && w.Index == idx {
-			targetWin = w
-			break
+	}
+	if targetWin == nil {
+		if idx, err := strconv.Atoi(winName); err == nil {
+			for i := range windows {
+				if windows[i].Index == idx {
+					targetWin = &windows[i]
+					break
+				}
+			}
 		}
 	}
 	if targetWin == nil {

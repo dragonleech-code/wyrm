@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+
+	"github.com/jskoll/wyrm/internal/process"
 )
 
 // Notification holds the data for an agent state transition alert.
@@ -134,8 +136,7 @@ func Dispatch(n Notification, cfg NotifyConfig, out io.Writer) error {
 	// Custom command
 	if cfg.Command != "" {
 		cmd := BuildCustomNotifyCommand(cfg.Command, n, title, msg)
-		_ = cmd.Run()
-		return nil
+		return runNotification(cmd)
 	}
 
 	// Desktop notification
@@ -177,11 +178,18 @@ var SendDesktopNotification = func(title, msg string) {
 	switch runtime.GOOS {
 	case "darwin":
 		script := fmt.Sprintf(`display notification %q with title %q`, msg, title)
-		_ = exec.Command("osascript", "-e", script).Run()
+		_ = runNotification(exec.Command("osascript", "-e", script))
 	case "linux", "freebsd", "openbsd", "netbsd":
-		_ = exec.Command("notify-send", title, msg).Run()
+		_ = runNotification(exec.Command("notify-send", title, msg))
 	case "windows":
 		cmd := BuildWindowsToastCommand(title, msg)
-		_ = cmd.Run()
+		_ = runNotification(cmd)
 	}
+}
+
+func runNotification(cmd *exec.Cmd) error {
+	bounded, cancel := process.Command(cmd.Path, cmd.Args[1:]...)
+	defer cancel()
+	bounded.Env = cmd.Env
+	return bounded.Run()
 }
