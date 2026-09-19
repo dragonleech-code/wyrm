@@ -36,7 +36,7 @@ func TestIntegrationNestedSplitGeometry(t *testing.T) {
 		t.Skip("tmux not installed")
 	}
 
-	r := tmux.Exec{SocketName: fmt.Sprintf("wyrm-geom-%d", os.Getpid())}
+	r := tmux.Exec{ConfigFile: os.DevNull, SocketName: fmt.Sprintf("wyrm-geom-%d", os.Getpid())}
 	t.Cleanup(func() { r.Run("kill-server") }) //nolint:errcheck
 
 	root := t.TempDir()
@@ -190,7 +190,7 @@ func TestIntegrationSplitPanesUseSessionRoot(t *testing.T) {
 	// Stand somewhere else entirely, which is what makes the bug visible.
 	t.Chdir(t.TempDir())
 
-	r := tmux.Exec{SocketName: fmt.Sprintf("wyrm-root-it-%d", os.Getpid())}
+	r := tmux.Exec{ConfigFile: os.DevNull, SocketName: fmt.Sprintf("wyrm-root-it-%d", os.Getpid())}
 	t.Cleanup(func() { _, _ = r.Run("kill-server") })
 
 	cfg := &config.Config{
@@ -286,7 +286,7 @@ func TestIntegrationWindowAndSplitRoots(t *testing.T) {
 	}
 	t.Chdir(t.TempDir())
 
-	r := tmux.Exec{SocketName: fmt.Sprintf("wyrm-wroot-it-%d", os.Getpid())}
+	r := tmux.Exec{ConfigFile: os.DevNull, SocketName: fmt.Sprintf("wyrm-wroot-it-%d", os.Getpid())}
 	t.Cleanup(func() { _, _ = r.Run("kill-server") })
 
 	cfg := &config.Config{
@@ -342,7 +342,7 @@ func TestIntegrationRunStartsProcessDirectly(t *testing.T) {
 		t.Skip("tmux not installed")
 	}
 
-	r := tmux.Exec{SocketName: fmt.Sprintf("wyrm-run-it-%d", os.Getpid())}
+	r := tmux.Exec{ConfigFile: os.DevNull, SocketName: fmt.Sprintf("wyrm-run-it-%d", os.Getpid())}
 	t.Cleanup(func() { _, _ = r.Run("kill-server") })
 
 	cfg := &config.Config{
@@ -402,7 +402,7 @@ func TestIntegrationBatchedBuildSpawnsFewerProcesses(t *testing.T) {
 		}
 	}
 
-	base := tmux.Exec{SocketName: fmt.Sprintf("wyrm-spawn-it-%d", os.Getpid())}
+	base := tmux.Exec{ConfigFile: os.DevNull, SocketName: fmt.Sprintf("wyrm-spawn-it-%d", os.Getpid())}
 	t.Cleanup(func() { _, _ = base.Run("kill-server") })
 
 	batched := &spawnCounter{Exec: base}

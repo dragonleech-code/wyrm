@@ -22,7 +22,7 @@ func TestListAndKillIntegration(t *testing.T) {
 		t.Skip("tmux not installed")
 	}
 
-	r := tmux.Exec{SocketName: fmt.Sprintf("wyrm-sess-it-%d", os.Getpid())}
+	r := tmux.Exec{ConfigFile: os.DevNull, SocketName: fmt.Sprintf("wyrm-sess-it-%d", os.Getpid())}
 	t.Cleanup(func() { r.Run("kill-server") }) //nolint:errcheck
 
 	// No server running yet: ListSessions must report empty, not error.
@@ -80,7 +80,7 @@ func TestDottedSessionNameIntegration(t *testing.T) {
 		t.Skip("tmux not installed")
 	}
 
-	r := tmux.Exec{SocketName: fmt.Sprintf("wyrm-sess-dot-it-%d", os.Getpid())}
+	r := tmux.Exec{ConfigFile: os.DevNull, SocketName: fmt.Sprintf("wyrm-sess-dot-it-%d", os.Getpid())}
 	t.Cleanup(func() { r.Run("kill-server") }) //nolint:errcheck
 
 	if out, err := r.Run("new-session", "-d", "-s", "wyrm.vim"); err != nil {

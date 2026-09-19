@@ -671,6 +671,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		return m.handleKey(msg)
+	case clipboardMsg:
+		m.copyResult(msg.what, msg.err)
+		return m, nil
 
 	case tea.MouseMsg:
 		return m.handleMouse(msg)
@@ -694,35 +697,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				for paneID, state := range msg.status.panes {
 					prevState := m.prevPaneStates[paneID]
 					if state != prevState && (state == agent.StateBlocked || state == agent.StateIdle) {
-						sessName := ""
-						winName := ""
-						for _, ref := range m.allPanes {
-							if ref.PaneID == paneID {
-								sessName = ref.SessionName
-								winName = ref.WindowName
-								break
-							}
-						}
+						ref := msg.status.refs[paneID]
 						n := agent.Notification{
 							State:       state,
 							PaneID:      paneID,
-							SessionName: sessName,
-							WindowName:  winName,
+							SessionName: ref.SessionName,
+							WindowName:  ref.WindowName,
 						}
-						// nil, not os.Stdout: Dispatch writes the bell and
-						// the OSC 9/777 sequences straight to the writer it is
-						// given, and this runs in a tea.Cmd goroutine while
-						// Bubble Tea's renderer is writing frames to the same
-						// fd. Those channels are skipped here; the desktop
-						// notification and the custom command are subprocesses
-						// and stay. Bubble Tea v1 offers no safe way to write
-						// raw escapes under the alt screen (tea.Printf is
-						// dropped there), so this is a deliberate omission
-						// rather than an oversight.
-						notifyCmds = append(notifyCmds, func() tea.Msg {
-							_ = agent.Dispatch(n, cfg, nil)
-							return nil
-						})
+						notifyCmds = append(notifyCmds, notificationCmd(n, cfg))
 					}
 				}
 			}
@@ -1228,19 +1210,23 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch m.focus {
 		case panelSessions:
 			if s, ok := m.currentSession(); ok {
-				m.copy(s.Name, fmt.Sprintf("session %q", s.Name))
+				return m, copyCmd(s.Name, fmt.Sprintf("session %q", s.Name))
 			}
 		case panelProjects:
 			if p, ok := m.currentProject(); ok {
-				m.copy(p.Path, fmt.Sprintf("project path %q", p.Path))
+				path := p.Path
+				if path == "" {
+					path = p.Root
+				}
+				return m, copyCmd(path, fmt.Sprintf("project path %q", path))
 			}
 		case panelWindows:
 			if w, ok := m.currentWindow(); ok {
-				m.copy(w.Name, fmt.Sprintf("window %q", w.Name))
+				return m, copyCmd(w.Name, fmt.Sprintf("window %q", w.Name))
 			}
 		case panelPanes:
 			if p, ok := m.currentPane(); ok {
-				m.copy(m.preview, fmt.Sprintf("pane %s preview", p.ID))
+				return m, copyCmd(m.preview, fmt.Sprintf("pane %s preview", p.ID))
 			}
 		}
 		return m, nil
@@ -1260,8 +1246,18 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // have none, and Model must stay comparable, so this cannot be a func field.
 var clipboardWrite = clipboard.Write
 
-func (m *Model) copy(text, what string) {
-	if err := clipboardWrite(text); err != nil {
+type clipboardMsg struct {
+	what string
+	err  error
+}
+
+func copyCmd(text, what string) tea.Cmd {
+	write := clipboardWrite
+	return func() tea.Msg { return clipboardMsg{what: what, err: write(text)} }
+}
+
+func (m *Model) copyResult(what string, err error) {
+	if err != nil {
 		if errors.Is(err, clipboard.ErrNoBackend) {
 			m.info = "cannot copy: no clipboard tool found (install " + clipboard.Backends() + ")"
 			return
@@ -1343,8 +1339,7 @@ func (m Model) handlePagerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "y":
 		text := strings.Join(m.pagerLines, "\n")
-		m.copy(text, fmt.Sprintf("%d lines", len(m.pagerLines)))
-		return m, nil
+		return m, copyCmd(text, fmt.Sprintf("%d lines", len(m.pagerLines)))
 	}
 
 	if m.pagerScroll > maxScroll {

@@ -29,14 +29,29 @@ func main() {
 	// the runner before any verb runs.
 	settings, err := config.LoadSettings()
 	if err != nil {
-		_, _ = fmt.Fprintln(os.Stderr, "wyrm: "+err.Error())
-		os.Exit(1)
+		if !settingsOptional(os.Args[1:]) {
+			_, _ = fmt.Fprintln(os.Stderr, "wyrm: "+err.Error())
+			os.Exit(1)
+		}
+		settings = &config.Settings{Storage: config.StorageLocal}
 	}
 	for _, w := range settings.Warnings() {
 		_, _ = fmt.Fprintln(os.Stderr, "wyrm: warning: "+w)
 	}
 	runner := runnerFromSettings(settings)
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr, runner, tmux.InsideTmux, runner.Attach))
+}
+
+// Diagnostics and basic help must remain available when settings are broken.
+func settingsOptional(args []string) bool {
+	if len(args) == 0 {
+		return false
+	}
+	switch args[0] {
+	case "doctor", "help", "--help", "-help", "-h", "version", "--version", "-version", "-v":
+		return true
+	}
+	return false
 }
 
 // runnerFromSettings builds the tmux.Exec every tmux invocation for this
@@ -284,7 +299,7 @@ Usage:
   wyrm status [-format FMT]  print agent status across sessions (FMT: text, json, tmux, waybar, sketchybar)
   wyrm send [target] [cmd]   send command or keys to target session/window/pane (-l, -n, -r)
   wyrm list [-format FMT]    list running sessions (FMT: table, json, toml, names)
-  wyrm list-configs          list candidate config file paths (used by shell completion)
+  wyrm list-configs [-names] list config paths, or project names and aliases
   wyrm migrate-config        move the local config into the shared config directory
   wyrm clone REPO [DEST]     git clone, then confirm and build a session for it (-y, -no-start)
   wyrm init [-template T]    scaffold a project config interactively or with -template (-force)

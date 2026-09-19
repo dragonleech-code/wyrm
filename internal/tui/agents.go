@@ -17,6 +17,7 @@ type agentStatus struct {
 	panes    map[string]agent.State
 	windows  map[string]agent.State
 	sessions map[string]agent.State
+	refs     map[string]tmux.PaneRef
 }
 
 func (a agentStatus) pane(id string) agent.State    { return a.panes[id] }
@@ -47,6 +48,10 @@ func loadAgentStatus(r tmux.Runner, profiles []agent.Profile, skipPane string) t
 			panes:    map[string]agent.State{},
 			windows:  map[string]agent.State{},
 			sessions: map[string]agent.State{},
+			refs:     map[string]tmux.PaneRef{},
+		}
+		for _, ref := range refs {
+			status.refs[ref.PaneID] = ref
 		}
 		// Pick the panes worth reading first, then read them all at once. The
 		// captures are independent of one another, so on a Runner that batches
