@@ -42,9 +42,11 @@ key="${key#"${key%%[![:space:]]*}"}"
 key="${key%"${key##*[![:space:]]}"}"
 key="${key#Bearer }"
 
+# Runs are manual-only, so a missing key is always a setup mistake, never a
+# fork PR to skip quietly: fail, or an empty secret looks like a green review.
 if [ -z "$key" ]; then
-  echo "::notice::AI_REVIEW_API_KEY not available (unset secret); skipping AI review"
-  exit 0
+  echo "::error::No API key: the AI_REVIEW_API_KEY / OPENROUTER_API_KEY secret is unset or blank"
+  exit 1
 fi
 
 # OpenRouter answers any malformed key with "Missing Authentication header",
