@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.2.2] - 2026-09-19
+
 ### Fixed
 
 - Validate replacement roots before stopping a session; bulk kill/restart now
@@ -31,6 +33,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Build documentation strictly on pull requests with pinned Python dependencies;
   deployment permissions are restricted to the deployment job.
 - Isolate integration-test tmux servers from personal configuration and plugins.
+- Add an opt-in AI first-pass review workflow: it runs when a PR is opened from
+  a branch of this repo and on demand for anything else, posting findings as
+  inline review comments. Repository tooling only; it does not affect the
+  binary.
 
 ## [1.2.1] - 2026-09-05
 
@@ -817,7 +823,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - `wyrm -kill` no longer runs `on_project_exit` when the session isn't
   running.
 
-[Unreleased]: https://github.com/jskoll/wyrm/compare/v1.2.1...HEAD
+[Unreleased]: https://github.com/jskoll/wyrm/compare/v1.2.2...HEAD
+[1.2.2]: https://github.com/jskoll/wyrm/compare/v1.2.1...v1.2.2
 [1.2.1]: https://github.com/jskoll/wyrm/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/jskoll/wyrm/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/jskoll/wyrm/compare/v1.1.0...v1.1.1
