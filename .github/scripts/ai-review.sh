@@ -98,7 +98,10 @@ Answer as JSON matching the schema. Field notes:
 - findings: one entry per problem, at most 20, most severe first.
 - file: the path exactly as the diff spells it, with no a/ or b/ prefix.
 - line: a line number on the NEW side of the diff (a line the diff shows as
-  added or as context). Never a line the diff does not show.
+  added or as context). Never a line the diff does not show. When the problem
+  is about code the diff does not contain — something the change should have
+  updated elsewhere, a caller it breaks — still report it, anchored to the
+  line in the diff that causes it.
 - label and decoration follow the Conventional Comments convention:
   issue = something wrong, suggestion = a concrete change to make,
   nitpick = minor and always non-blocking, question = you need information,
