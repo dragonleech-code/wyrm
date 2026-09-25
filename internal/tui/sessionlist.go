@@ -59,9 +59,13 @@ func (m Model) sessionEntries() []sessionEntry {
 	// First project wins a name collision, matching listProjects' own
 	// precedence (a real config over a zoxide directory of the same name).
 	byName := make(map[string]Project, len(m.projects))
+	bySanitizedName := make(map[string]Project, len(m.projects))
 	for _, p := range m.projects {
 		if _, seen := byName[p.Name]; !seen {
 			byName[p.Name] = p
+		}
+		if _, seen := bySanitizedName[tmux.SanitizeName(p.Name)]; !seen {
+			bySanitizedName[tmux.SanitizeName(p.Name)] = p
 		}
 	}
 
@@ -71,13 +75,8 @@ func (m Model) sessionEntries() []sessionEntry {
 		e := sessionEntry{Name: s.Name, Session: s, Running: true}
 		if p, ok := byName[s.Name]; ok {
 			e.Project, e.HasProject = p, true
-		} else {
-			for _, p := range m.projects {
-				if tmux.SanitizeName(p.Name) == s.Name {
-					e.Project, e.HasProject = p, true
-					break
-				}
-			}
+		} else if p, ok := bySanitizedName[s.Name]; ok {
+			e.Project, e.HasProject = p, true
 		}
 		entries = append(entries, e)
 	}

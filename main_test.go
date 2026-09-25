@@ -1825,6 +1825,27 @@ func TestRunRestartAll(t *testing.T) {
 	}
 }
 
+func TestRunRestartAllMatchesInterpolatedName(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	shared := filepath.Join(home, ".config", "wyrm", "settings")
+	if err := os.MkdirAll(shared, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := "[session]\nname = 'api-$ENV'\n[[windows]]\nname = 'w'\n"
+	if err := os.WriteFile(filepath.Join(shared, "api.wyrm.toml"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r := &fakeRunner{listOutput: "$1|1|0|1000|api-dev"}
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"restart", "-all", "-y", "-var", "ENV=dev"}, &stdout, &stderr, r,
+		func() bool { return false }, nil)
+	if code != 0 || !strings.Contains(stdout.String(), "created session api-dev") {
+		t.Fatalf("restart = %d, stdout = %q, stderr = %q", code, stdout.String(), stderr.String())
+	}
+}
+
 func TestRunRestartAllDryRun(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

@@ -40,15 +40,9 @@ step is the one that matters if the release channel is ever compromised.
 The public key lives in the repository at `internal/selfupdate/signing.pub` and
 is compiled into every binary; only the secret key is a repository secret.
 
-**Until a key is generated, `internal/selfupdate/signing.pub` is a placeholder
-and no release can be tagged.** To set it up:
-
-```sh
-minisign -G -p signing.pub -s minisign.key
-cp signing.pub internal/selfupdate/signing.pub   # commit this
-```
-
-Then add two repository secrets:
+The committed public key is active and has been used for signed releases since
+1.2.0. Keep the matching private key in the release secrets; do not generate a
+replacement key as part of an ordinary release. The workflow uses:
 
 | Secret | Value |
 | --- | --- |
@@ -61,8 +55,9 @@ publishing a release whose own `selfupdate` would reject it. CI signs every pull
 request with a throwaway key and asserts `checksums.txt.minisig` is produced, so
 the signing path cannot silently stop working between releases.
 
-A binary built before a key was configured still updates, but prints a warning
-saying the release was not signature-verified.
+Rotating the key requires a transition that keeps already shipped binaries able
+to verify updates. Plan and document that migration before changing the
+compiled public key.
 
 ### Verifying a release by hand
 

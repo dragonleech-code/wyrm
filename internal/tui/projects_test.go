@@ -179,6 +179,9 @@ func TestKillProjectSurfacesHookWarning(t *testing.T) {
 	}
 	r := &funcRunner{fn: func(args ...string) (string, error) {
 		if args[0] == "list-sessions" {
+			if len(args) > 2 && strings.Contains(args[2], "session_windows") {
+				return "$1|1|0|100|proj", nil
+			}
 			return "$1|proj", nil
 		}
 		return "", nil

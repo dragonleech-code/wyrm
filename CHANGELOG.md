@@ -6,6 +6,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Require confirmation for executable tmux pane title formats in cloned configs.
+- Preserve legacy shared configs whose session root is below the project directory.
+- Serialize project startup and record first-start history only after a successful build.
+- Resolve dotted window names, single-component scp clone URLs, and variable-based session names during bulk restart.
+- Surface notification and configuration-write failures and omit configured commands from routine diagnostics.
+- Reject malformed tmux session records and reuse agent scan policy across the TUI and status command.
+- Avoid repeated wildcard config parsing and duplicate tmux session listings during TUI refreshes.
+
 ## [1.2.2] - 2026-09-19
 
 ### Fixed

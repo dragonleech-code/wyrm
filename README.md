@@ -759,7 +759,7 @@ ok    editor           nvim
 warn  clipboard        no backend found
                        → install one of wl-copy, xclip, xsel; until then "y" in the TUI cannot copy
 note  zoxide           disabled (zoxide.enabled = false)
-note  release signing  no key compiled in; `wyrm selfupdate` verifies checksums only
+ok    release signing  public key compiled in; releases are signature-verified
 
 1 error, 3 warnings
 ```
@@ -896,7 +896,7 @@ name = "dev"
 ### `[[windows.panes]]` — legacy flat list
 
 > **Deprecated.** The flat `panes` list (and the `.tmuxconfig` filename) are
-> retained for backward compatibility but are slated for removal in 1.0. New
+> retained for backward compatibility. New
 > configs should use the `splits` tree, which is strictly more expressive.
 > `wyrm save` only ever emits `splits`.
 

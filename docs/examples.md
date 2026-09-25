@@ -30,7 +30,7 @@ with lifecycle hooks and a `startup_window`.
 !!! warning "Deprecated format"
     This is the only example still using the flat `[[windows.panes]]` list,
     kept as a reference for existing configs. It and the `.tmuxconfig`
-    filename are slated for removal in 1.0, and wyrm warns when it loads a
+    filename are deprecated, and wyrm warns when it loads a
     config using either. New configs should use the `splits` tree — every
     other example below does.
 

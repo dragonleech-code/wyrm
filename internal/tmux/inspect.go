@@ -47,6 +47,12 @@ func SessionPath(r Runner, sessionID string) (string, error) {
 // means the format string and this parser disagree, which is a wyrm bug and not
 // something to paper over.
 func records(out string, n int, what string) ([][]string, error) {
+	return ParseRecords(out, n, false, what)
+}
+
+// ParseRecords validates pipe-delimited tmux output. optionalLast accepts
+// older pane records with no current-path field.
+func ParseRecords(out string, n int, optionalLast bool, what string) ([][]string, error) {
 	var recs [][]string
 	for _, line := range strings.Split(out, "\n") {
 		line = strings.TrimRight(line, "\r")
@@ -54,6 +60,9 @@ func records(out string, n int, what string) ([][]string, error) {
 			continue
 		}
 		fields := strings.SplitN(line, "|", n)
+		if optionalLast && len(fields) == n-1 {
+			fields = append(fields, "")
+		}
 		if len(fields) != n {
 			return nil, fmt.Errorf("unexpected %s output %q", what, line)
 		}
@@ -64,6 +73,11 @@ func records(out string, n int, what string) ([][]string, error) {
 
 // atoiField converts a numeric field, naming what it was.
 func atoiField(field, what string) (int, error) {
+	return AtoiField(field, what)
+}
+
+// AtoiField parses a tmux numeric field with a useful diagnostic.
+func AtoiField(field, what string) (int, error) {
 	n, err := strconv.Atoi(field)
 	if err != nil {
 		return 0, fmt.Errorf("unexpected %s %q", what, field)
@@ -229,20 +243,9 @@ func ListPanes(r Runner, target string) ([]PaneInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("listing panes: %w", CmdErr(err, out))
 	}
-	var recs [][]string
-	for _, line := range strings.Split(out, "\n") {
-		line = strings.TrimRight(line, "\r")
-		if line == "" {
-			continue
-		}
-		fields := strings.SplitN(line, "|", 5)
-		if len(fields) < 4 {
-			return nil, fmt.Errorf("unexpected list-panes output %q", line)
-		}
-		if len(fields) == 4 {
-			fields = append(fields, "")
-		}
-		recs = append(recs, fields)
+	recs, err := ParseRecords(out, 5, true, "list-panes")
+	if err != nil {
+		return nil, err
 	}
 	panes := make([]PaneInfo, 0, len(recs))
 	for _, f := range recs {

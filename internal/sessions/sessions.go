@@ -18,6 +18,7 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/jskoll/wyrm/internal/config"
 	"github.com/jskoll/wyrm/internal/tmux"
 )
 
@@ -28,6 +29,22 @@ type Session struct {
 	Windows  int       `json:"windows" toml:"windows"`
 	Attached bool      `json:"attached" toml:"attached"`
 	Activity time.Time `json:"activity" toml:"activity"`
+}
+
+// FindProject matches a live session against discovered project identities.
+// Aliases are command lookup names and never identify an existing session.
+func FindProject(index config.ProjectIndex, name string) (config.Project, bool) {
+	for _, p := range index.Projects() {
+		if p.Name == name {
+			return p, true
+		}
+	}
+	for _, p := range index.Projects() {
+		if tmux.SanitizeName(p.Name) == name {
+			return p, true
+		}
+	}
+	return config.Project{}, false
 }
 
 // listFormat mirrors the pipe-separated fields parseSession expects. tmux
@@ -51,37 +68,44 @@ func List(r tmux.Runner) ([]Session, error) {
 		}
 		return nil, fmt.Errorf("listing sessions: %w", tmux.CmdErr(err, out))
 	}
-	var list []Session
-	for _, line := range strings.Split(out, "\n") {
-		if s, ok := parseSession(strings.TrimRight(line, "\r")); ok {
-			list = append(list, s)
+	if tmux.NoServerRunning(nil, out) {
+		return nil, nil
+	}
+	recs, err := tmux.ParseRecords(out, 5, false, "list-sessions")
+	if err != nil {
+		return nil, err
+	}
+	list := make([]Session, 0, len(recs))
+	for _, fields := range recs {
+		s, err := parseSession(fields)
+		if err != nil {
+			return nil, err
 		}
+		list = append(list, s)
 	}
 	sortSessions(list)
 	return list, nil
 }
 
-func parseSession(line string) (Session, bool) {
-	if strings.TrimSpace(line) == "" {
-		return Session{}, false
+func parseSession(f []string) (Session, error) {
+	if err := tmux.CheckID(tmux.SessionSigil, "session", f[0]); err != nil {
+		return Session{}, err
 	}
-	// SplitN with n=5 so a "|" in the name (the last field) is preserved.
-	f := strings.SplitN(line, "|", 5)
-	if len(f) < 5 {
-		return Session{}, false
+	windows, err := tmux.AtoiField(f[1], "session window count")
+	if err != nil {
+		return Session{}, err
 	}
-	if !tmux.ValidID(tmux.SessionSigil, f[0]) {
-		return Session{}, false
+	epoch, err := strconv.ParseInt(f[3], 10, 64)
+	if err != nil {
+		return Session{}, fmt.Errorf("unexpected session activity %q: %w", f[3], err)
 	}
-	windows, _ := strconv.Atoi(f[1])
-	epoch, _ := strconv.ParseInt(f[3], 10, 64)
 	return Session{
 		ID:       f[0],
 		Name:     f[4],
 		Windows:  windows,
 		Attached: f[2] == "1",
 		Activity: time.Unix(epoch, 0),
-	}, true
+	}, nil
 }
 
 // sortSessions orders by most recent activity, then name for a stable tie-break.

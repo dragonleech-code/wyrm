@@ -50,6 +50,10 @@ type HookHistory interface {
 	MarkStarted(dir string) error
 }
 
+type projectLocker interface {
+	LockProject(dir string) (func(), error)
+}
+
 // WithHistory supplies the record Create consults to fire
 // on_project_first_start or on_project_restart. Without it, neither hook
 // ever fires — there is no sensible default for "has this ever started".
@@ -110,6 +114,15 @@ func Create(r tmux.Runner, cfg *config.Config, stdout, stderr io.Writer, opts ..
 		return "", "", false, fmt.Errorf("no windows defined in config")
 	}
 
+	if !o.dryRun && o.history != nil {
+		if locker, ok := o.history.(projectLocker); ok {
+			unlock, lockErr := locker.LockProject(root)
+			if lockErr != nil {
+				return "", "", false, fmt.Errorf("locking project startup: %w", lockErr)
+			}
+			defer unlock()
+		}
+	}
 	if id, ok, ferr := tmux.FindSessionID(r, name); ferr != nil {
 		return "", "", false, ferr
 	} else if ok {
@@ -131,27 +144,11 @@ func Create(r tmux.Runner, cfg *config.Config, stdout, stderr io.Writer, opts ..
 	if err := runHook(o, cfg.Session.OnProjectStart, root, "on_project_start", cfg.Session.Env, stderr); err != nil {
 		warnf(stderr, "on_project_start failed: %v", err)
 	}
-	runFirstStartOrRestartHook(o, cfg, root, stderr)
+	markFirstStart := runFirstStartOrRestartHook(o, cfg, root, stderr)
 
-	// Every window's root is resolved up front so a bad one fails before any
-	// tmux state exists, rather than half way through a build.
-	roots := make([]string, len(cfg.Windows))
-	winEnvs := make([]map[string]string, len(cfg.Windows))
-	initEnvs := make([]map[string]string, len(cfg.Windows))
-	for i, w := range cfg.Windows {
-		wr, rerr := config.ResolveRoot(root, w.Root)
-		if rerr != nil {
-			return "", "", false, fmt.Errorf("window %q: %w", w.Name, rerr)
-		}
-		roots[i] = wr
-
-		we := mergeEnv(cfg.Session.Env, w.Env)
-		winEnvs[i] = we
-		ie := we
-		if len(w.Splits) > 0 && w.Splits[0].Type == "" {
-			_, ie, _ = paneAttributes(w.Splits[0], wr, we)
-		}
-		initEnvs[i] = ie
+	plan, err := prepareWindows(cfg, root)
+	if err != nil {
+		return "", "", false, err
 	}
 
 	// Commands are collected while the layout is built and typed in one tmux
@@ -159,22 +156,7 @@ func Create(r tmux.Runner, cfg *config.Config, stdout, stderr io.Writer, opts ..
 	// is twelve send-keys calls collapsed into one.
 	keys := &keyBatch{}
 
-	initRoots := make([]string, len(cfg.Windows))
-	for i, w := range cfg.Windows {
-		initRoot := roots[i]
-		// A first split's own root always overrides the window's — Split.Root
-		// is documented to override the window directory for its pane
-		// regardless of whether the window set one itself. Gating this on
-		// w.Root being empty silently ignored splits[0].root whenever the
-		// window also had a root, and started the initial pane in the wrong
-		// directory.
-		if len(w.Splits) > 0 && w.Splits[0].Type == "" {
-			initRoot, _, _ = paneAttributes(w.Splits[0], roots[i], winEnvs[i])
-		}
-		initRoots[i] = initRoot
-	}
-
-	first, err := newSession(r, name, cfg.Windows[0], initRoots[0], envArgs(initEnvs[0]), stderr)
+	first, err := newSession(r, name, cfg.Windows[0], plan.initRoots[0], envArgs(plan.initEnvs[0]), stderr)
 	if err != nil {
 		return "", "", false, err
 	}
@@ -195,7 +177,7 @@ func Create(r tmux.Runner, cfg *config.Config, stdout, stderr io.Writer, opts ..
 		windowID, paneID := first.windowID, first.paneID
 		if i > 0 {
 			var werr error
-			windowID, paneID, werr = newWindow(r, id, w, initRoots[i], envArgs(initEnvs[i]))
+			windowID, paneID, werr = newWindow(r, id, w, plan.initRoots[i], envArgs(plan.initEnvs[i]))
 			if werr != nil {
 				return "", "", false, rollback(r, id, stderr, werr)
 			}
@@ -216,13 +198,53 @@ func Create(r tmux.Runner, cfg *config.Config, stdout, stderr io.Writer, opts ..
 		}
 		_, _ = fmt.Fprintf(stdout, "window %s: %s\n", windowID, w.Name)
 		buildWindow(r, windowID, paneID, w, splitCtx{
-			root: roots[i], envMap: winEnvs[i], preWindow: w.PreWindow, keys: keys,
+			root: plan.roots[i], envMap: plan.envs[i], preWindow: w.PreWindow, keys: keys,
 		}, stderr)
 		enablePaneTitles(r, windowID, cfg.Session, stderr)
 	}
 
 	// Every pane now exists, so every target is known: type the lot.
 	keys.flush(r, stderr)
+	finishWindows(r, cfg, o, plan, id, first.windowID, windowIDs, syncStates, stderr)
+	if markFirstStart {
+		if err := o.history.MarkStarted(root); err != nil {
+			return name, id, true, fmt.Errorf("recording project start: %w", err)
+		}
+	}
+	return name, id, true, nil
+}
+
+type windowPlan struct {
+	roots     []string
+	envs      []map[string]string
+	initRoots []string
+	initEnvs  []map[string]string
+}
+
+// prepareWindows resolves the paths and environments needed by the tmux build.
+func prepareWindows(cfg *config.Config, root string) (windowPlan, error) {
+	p := windowPlan{
+		roots: make([]string, len(cfg.Windows)), envs: make([]map[string]string, len(cfg.Windows)),
+		initRoots: make([]string, len(cfg.Windows)), initEnvs: make([]map[string]string, len(cfg.Windows)),
+	}
+	for i, w := range cfg.Windows {
+		wr, err := config.ResolveRoot(root, w.Root)
+		if err != nil {
+			return windowPlan{}, fmt.Errorf("window %q: %w", w.Name, err)
+		}
+		p.roots[i] = wr
+		p.envs[i] = mergeEnv(cfg.Session.Env, w.Env)
+		p.initRoots[i], p.initEnvs[i] = wr, p.envs[i]
+		// The first split's root and env override the initial pane's values.
+		if len(w.Splits) > 0 && w.Splits[0].Type == "" {
+			p.initRoots[i], p.initEnvs[i], _ = paneAttributes(w.Splits[0], wr, p.envs[i])
+		}
+	}
+	return p, nil
+}
+
+// finishWindows restores tmux options and applies post-build session policy.
+func finishWindows(r tmux.Runner, cfg *config.Config, o options, plan windowPlan, id, firstWindowID string, windowIDs, syncStates []string, stderr io.Writer) {
 	for i, w := range cfg.Windows {
 		syncState := syncStates[i]
 		setting := w.Synchronize
@@ -249,18 +271,18 @@ func Create(r tmux.Runner, cfg *config.Config, stdout, stderr io.Writer, opts ..
 	// been sent first, not just the pane to exist. Sequential and in window
 	// order, matching the order windows were built in.
 	for i, w := range cfg.Windows {
-		if err := runHook(o, w.PostWindow, roots[i], "post_window", winEnvs[i], stderr); err != nil {
+		if err := runHook(o, w.PostWindow, plan.roots[i], "post_window", plan.envs[i], stderr); err != nil {
 			warnf(stderr, "post_window failed for window %q: %v", w.Name, err)
 		}
 	}
 
 	if cfg.Session.StartupWindow != "" {
 		selectStartup(r, id, cfg.Session.StartupWindow, cfg.Session.StartupPane, stderr)
-	} else if first.windowID != "" {
+	} else if firstWindowID != "" {
 		// Every window was created with -d, so window 0 is still current — but
 		// say so explicitly rather than relying on that, and land on its first
 		// pane too (splits are also created with -d).
-		if _, err := r.Run("select-window", "-t", first.windowID); err != nil {
+		if _, err := r.Run("select-window", "-t", firstWindowID); err != nil {
 			warnf(stderr, "failed to select the first window: %v", err)
 		}
 	}
@@ -269,7 +291,6 @@ func Create(r tmux.Runner, cfg *config.Config, stdout, stderr io.Writer, opts ..
 			warnf(stderr, "failed to configure on_project_detach hook: %v", err)
 		}
 	}
-	return name, id, true, nil
 }
 
 // ValidateRoots resolves every root a Create build would need — the
@@ -865,13 +886,13 @@ func (k *keyBatch) flush(r tmux.Runner, stderr io.Writer) {
 	errs := tmux.RunEach(r, cmds)
 	for i, s := range k.sends {
 		// Either half failing means the command didn't run as typed; report it
-		// once, naming the command rather than the tmux call.
+		// once, without copying possibly sensitive command text to logs.
 		if err := errs[i*2]; err != nil {
-			warnf(stderr, "failed to run %q in %s: %v", s.command, s.target, err)
+			warnf(stderr, "failed to run command in %s: %v", s.target, err)
 			continue
 		}
 		if err := errs[i*2+1]; err != nil {
-			warnf(stderr, "failed to run %q in %s: %v", s.command, s.target, err)
+			warnf(stderr, "failed to run command in %s: %v", s.target, err)
 		}
 	}
 	k.sends = nil
@@ -1006,7 +1027,7 @@ func runHook(o options, hook, dir, label string, env map[string]string, stderr i
 	if shell == "" {
 		shell = "sh"
 	}
-	_, _ = fmt.Fprintf(stderr, "wyrm: running %s: %s\n", label, hook)
+	_, _ = fmt.Fprintf(stderr, "wyrm: running %s\n", label)
 	cmd := exec.Command(shell, "-c", hook)
 	cmd.Dir = dir
 	if len(env) > 0 {
@@ -1037,26 +1058,23 @@ func runHook(o options, hook, dir, label string, env map[string]string, stderr i
 //
 // The MarkStarted write is skipped under dry-run: describing what would
 // happen must not itself change what "first start" means for the real run
-// that follows.
-func runFirstStartOrRestartHook(o options, cfg *config.Config, root string, stderr io.Writer) {
+// that follows. A failed first-start hook also leaves history unchanged, so
+// its setup can be retried on the next start after the session is stopped.
+func runFirstStartOrRestartHook(o options, cfg *config.Config, root string, stderr io.Writer) bool {
 	if o.history == nil || cfg.Dir() == "" {
-		return
+		return false
 	}
 	if o.history.Started(root) {
 		if err := runHook(o, cfg.Session.OnProjectRestart, root, "on_project_restart", cfg.Session.Env, stderr); err != nil {
 			warnf(stderr, "on_project_restart failed: %v", err)
 		}
-		return
+		return false
 	}
 	if err := runHook(o, cfg.Session.OnProjectFirstStart, root, "on_project_first_start", cfg.Session.Env, stderr); err != nil {
 		warnf(stderr, "on_project_first_start failed: %v", err)
+		return false
 	}
-	if o.dryRun {
-		return
-	}
-	if err := o.history.MarkStarted(root); err != nil {
-		warnf(stderr, "failed to record project start: %v", err)
-	}
+	return !o.dryRun
 }
 
 // hookEnv merges the process environment with the session's configured env map,

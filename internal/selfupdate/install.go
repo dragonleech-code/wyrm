@@ -13,6 +13,10 @@ import (
 // POSIX rename repoints the directory entry without disturbing a process
 // still executing the old inode.
 func Install(path string, data []byte, mode os.FileMode) error {
+	return installWithOps(path, data, mode, os.Rename, syncDirectory)
+}
+
+func installWithOps(path string, data []byte, mode os.FileMode, rename func(string, string) error, syncDir func(string) error) error {
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".wyrm-update-*")
 	if err != nil {
 		return fmt.Errorf("creating temp file: %w", err)
@@ -35,14 +39,20 @@ func Install(path string, data []byte, mode os.FileMode) error {
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("writing %s: %w", tmpPath, err)
 	}
-	if err := os.Rename(tmpPath, path); err != nil {
+	if err := rename(tmpPath, path); err != nil {
 		return fmt.Errorf("replacing %s: %w", path, err)
 	}
-	if dir, err := os.Open(filepath.Dir(path)); err == nil {
-		defer func() { _ = dir.Close() }()
-		if err := dir.Sync(); err != nil {
-			return fmt.Errorf("binary installed, but syncing its directory failed: %w", err)
-		}
+	if err := syncDir(filepath.Dir(path)); err != nil {
+		return fmt.Errorf("binary installed, but syncing its directory failed: %w", err)
 	}
 	return nil
+}
+
+func syncDirectory(path string) error {
+	dir, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = dir.Close() }()
+	return dir.Sync()
 }

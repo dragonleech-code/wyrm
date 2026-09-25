@@ -42,7 +42,17 @@ func TestIntegration(t *testing.T) {
 	if out, err := r.Run("send-keys", "-t", "ittui", "echo WYRMSENTINEL", "Enter"); err != nil {
 		t.Fatalf("send-keys: %v (%s)", err, out)
 	}
-	time.Sleep(300 * time.Millisecond) // let the shell echo land before capture
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		out, err := r.Run("capture-pane", "-p", "-t", "ittui")
+		if err == nil && strings.Contains(out, "WYRMSENTINEL") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("sentinel did not reach the tmux pane: %v (%s)", err, out)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 
 	m := New(r, nil)
 	m.width, m.height, m.ready = 120, 40, true

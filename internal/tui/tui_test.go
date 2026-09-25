@@ -524,6 +524,9 @@ func containsSessions(msgs []tea.Msg) bool {
 		if _, ok := m.(sessionsMsg); ok {
 			return true
 		}
+		if _, ok := m.(listsMsg); ok {
+			return true
+		}
 	}
 	return false
 }

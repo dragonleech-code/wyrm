@@ -57,31 +57,9 @@ func loadAgentStatus(r tmux.Runner, profiles []agent.Profile, skipPane string) t
 		// captures are independent of one another, so on a Runner that batches
 		// this is a single tmux process instead of up to agent.MaxCaptures of
 		// them, every listRefreshInterval, for as long as the TUI is open.
-		candidates, _ := agent.Candidates(refs, profiles, skipPane, agent.MaxCaptures)
-		if len(candidates) == 0 {
-			return agentStatusMsg{status: status}
-		}
-
-		cmds := make([][]string, len(candidates))
-		for i, ref := range candidates {
-			cmds[i] = tmux.CapturePanePlainArgs(ref.PaneID)
-		}
-		// A pane that died between listing and capturing is ordinary, and it
-		// stops a batch short — so the ones it cut off are read individually
-		// rather than lost. A pane that could not be read comes back empty and,
-		// like a pane with nothing on it, simply stays unmarked.
-		contents := tmux.RunOutputs(r, cmds)
-
-		for i, ref := range candidates {
-			if i >= len(contents) || contents[i] == "" {
-				continue
-			}
-			state := agent.Detect(ref.Command, contents[i], profiles)
-			// Unknown is stored nowhere: it draws no marker and must not win a
-			// rollup, and leaving it out keeps the maps to panes worth showing.
-			if state == agent.StateNone || state == agent.StateUnknown {
-				continue
-			}
+		detections, _ := agent.Scan(r, refs, profiles, skipPane, agent.MaxCaptures)
+		for _, detection := range detections {
+			ref, state := detection.Ref, detection.State
 			status.panes[ref.PaneID] = state
 			status.windows[ref.WindowID] = agent.Merge(status.windows[ref.WindowID], state)
 			status.sessions[ref.SessionID] = agent.Merge(status.sessions[ref.SessionID], state)

@@ -41,3 +41,17 @@ func TestAgentTransitionNotification(t *testing.T) {
 		t.Errorf("expected prevPaneStates to be updated to Blocked")
 	}
 }
+
+func TestNotificationCommandFailureReachesModel(t *testing.T) {
+	cmd := notificationCmd(agent.Notification{State: agent.StateIdle}, agent.NotifyConfig{
+		Enabled: true, OnIdle: true, Command: "exit 7",
+	})
+	msg := cmd()
+	if _, ok := msg.(notificationErrorMsg); !ok {
+		t.Fatalf("notification returned %T, want notificationErrorMsg", msg)
+	}
+	m, _ := update(New(nopRunner(), nil), msg)
+	if m.err == nil {
+		t.Fatal("notification failure was not surfaced")
+	}
+}

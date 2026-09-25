@@ -140,6 +140,9 @@ func appendTmuxConf(path, snippet string, stdout io.Writer) error {
 	if _, err := f.WriteString("\n" + snippet); err != nil {
 		return err
 	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("closing %s: %w", path, err)
+	}
 	_, _ = fmt.Fprintf(stdout, "appended wyrm integration to %s\n", path)
 	return nil
 }

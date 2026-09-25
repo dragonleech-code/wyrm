@@ -295,12 +295,30 @@ func (a *app) restartAll(settings *config.Settings, dryRun, yes bool, vars map[s
 	var failures []error
 
 	for _, s := range active {
-		project, found := index.FindSession(s.Name)
+		project, found := sessions.FindProject(index, s.Name)
+		var matchedCfg *config.Config
+		if !found && len(vars) > 0 {
+			for _, candidate := range index.Projects() {
+				loaded, loadErr := candidate.LoadConfig()
+				if loadErr != nil {
+					continue
+				}
+				loaded.Interpolate(vars)
+				resolved, _, resolveErr := loaded.Session.Resolve(loaded.Dir())
+				if resolveErr == nil && (resolved == s.Name || tmux.SanitizeName(resolved) == s.Name) {
+					project, matchedCfg, found = candidate, loaded, true
+					break
+				}
+			}
+		}
 		if !found {
 			_, _ = fmt.Fprintf(a.stderr, "wyrm: skipping session %q: no project config found\n", s.Name)
 			continue
 		}
 		cfg, err := project.LoadConfig()
+		if matchedCfg != nil {
+			cfg, err = matchedCfg, nil
+		}
 		if err != nil {
 			_, _ = fmt.Fprintf(a.stderr, "wyrm: warning: skipping session %q: %v\n", s.Name, err)
 			failures = append(failures, fmt.Errorf("%s: %w", s.Name, err))
@@ -438,7 +456,7 @@ func (a *app) killAll(settings *config.Settings, dryRun, yes bool) error {
 	var failures []error
 
 	for _, s := range active {
-		if project, found := index.FindSession(s.Name); found {
+		if project, found := sessions.FindProject(index, s.Name); found {
 			if cfg, err := project.LoadConfig(); err == nil {
 				name, kerr := session.Kill(a.runner, cfg, a.stderr, opts...)
 				if kerr != nil {
@@ -562,7 +580,7 @@ func (a *app) attachByName(name string, extraArgs []string) error {
 		if nerr != nil {
 			return nerr
 		}
-		if project, found := config.NewProjectIndex(settings).FindSession(actualName); found {
+		if project, found := sessions.FindProject(config.NewProjectIndex(settings), actualName); found {
 			if cfg, err := project.LoadConfig(); err == nil {
 				if len(vars) > 0 {
 					cfg.Interpolate(vars)

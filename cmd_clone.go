@@ -160,6 +160,9 @@ func configCommands(cfg *config.Config) []string {
 	add("on_project_attach", cfg.Session.OnProjectAttach)
 	add("on_project_exit", cfg.Session.OnProjectExit)
 	add("on_project_detach", cfg.Session.OnProjectDetach)
+	if cfg.Session.EnablePaneTitles != nil && *cfg.Session.EnablePaneTitles && strings.Contains(cfg.Session.PaneTitleFormat, "#(") {
+		add("pane_title_format (tmux command substitution)", cfg.Session.PaneTitleFormat)
+	}
 	for _, w := range cfg.Windows {
 		where := "window " + w.Name
 		add(where+" pre_window", w.PreWindow)
@@ -192,5 +195,10 @@ func splitCommands(where string, splits []config.Split) []string {
 // scp-style "host:user/repo.git" address resolves the same way a URL does.
 func deriveCloneDir(repo string) string {
 	trimmed := strings.TrimSuffix(strings.TrimRight(repo, "/"), ".git")
+	if !strings.Contains(trimmed, "/") {
+		if _, path, ok := strings.Cut(trimmed, ":"); ok && path != "" {
+			trimmed = path
+		}
+	}
 	return filepath.Base(trimmed)
 }
