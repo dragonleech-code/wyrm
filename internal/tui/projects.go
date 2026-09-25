@@ -151,13 +151,6 @@ type projectStartedMsg struct {
 
 // --- commands ---
 
-func loadProjects(r tmux.Runner, settings *config.Settings) tea.Cmd {
-	return func() tea.Msg {
-		ps, err := listProjects(r, settings)
-		return projectsMsg{projects: ps, err: err}
-	}
-}
-
 func loadConfigPreview(path string) tea.Cmd {
 	return func() tea.Msg {
 		data, err := os.ReadFile(path)

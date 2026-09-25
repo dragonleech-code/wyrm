@@ -1058,7 +1058,8 @@ func runHook(o options, hook, dir, label string, env map[string]string, stderr i
 //
 // The MarkStarted write is skipped under dry-run: describing what would
 // happen must not itself change what "first start" means for the real run
-// that follows.
+// that follows. A failed first-start hook also leaves history unchanged, so
+// its setup can be retried on the next start after the session is stopped.
 func runFirstStartOrRestartHook(o options, cfg *config.Config, root string, stderr io.Writer) bool {
 	if o.history == nil || cfg.Dir() == "" {
 		return false

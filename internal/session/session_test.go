@@ -623,6 +623,23 @@ func TestFailedBuildDoesNotRecordFirstStart(t *testing.T) {
 	}
 }
 
+func TestFailedFirstStartHookIsRetried(t *testing.T) {
+	cfg := loadConfig(t, "[session]\nname = \"proj\"\nroot = \".\"\non_project_first_start = \"exit 1\"\non_project_restart = \"echo restart\"\n[[windows]]\nname = \"w\"\n")
+	hist := &fakeHistory{}
+	for attempt := 0; attempt < 2; attempt++ {
+		var stderr bytes.Buffer
+		if _, _, _, err := Create(&fakeRunner{}, cfg, io.Discard, &stderr, WithHistory(hist)); err != nil {
+			t.Fatalf("attempt %d: %v", attempt+1, err)
+		}
+		if !strings.Contains(stderr.String(), "on_project_first_start failed") || strings.Contains(stderr.String(), "running on_project_restart") {
+			t.Fatalf("attempt %d: wrong lifecycle hook: %q", attempt+1, stderr.String())
+		}
+		if len(hist.marked) != 0 {
+			t.Fatalf("attempt %d: failed hook marked history: %v", attempt+1, hist.marked)
+		}
+	}
+}
+
 // TestCreateWildcardProjectsHaveIndependentLifecycleHistory is the
 // regression test for keying lifecycle history off cfg.Dir(): every
 // directory a [[wildcard]] pattern matches shares one template file (and so
