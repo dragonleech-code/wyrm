@@ -76,6 +76,22 @@ func TestSharedConfigPathDisambiguatesOnCollision(t *testing.T) {
 	}
 }
 
+func TestSharedConfigPathKeepsLegacySubdirectoryRoot(t *testing.T) {
+	home := t.TempDir()
+	project := filepath.Join(home, "work", "api")
+	root := filepath.Join(project, "server")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	settings := &Settings{Storage: StorageShared, SharedDir: filepath.Join(home, "shared")}
+	plain := filepath.Join(settings.SharedDir, "api"+DefaultFileName)
+	writeSharedConfig(t, plain, root)
+	got, err := settings.SharedConfigPath(project)
+	if err != nil || got != plain {
+		t.Fatalf("SharedConfigPath = %q, %v; want %q", got, err, plain)
+	}
+}
+
 // The whole scheme rests on being able to tell who owns a file. A config that
 // predates this — no root, or a relative one — must read as unknown, because
 // every caller treats unknown as "assume it is ours" to stay compatible.

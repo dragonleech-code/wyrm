@@ -55,6 +55,10 @@ func listProjects(r tmux.Runner, settings *config.Settings) ([]Project, error) {
 	if err != nil {
 		return nil, err
 	}
+	return projectsFromSessions(settings, sessionList), nil
+}
+
+func projectsFromSessions(settings *config.Settings, sessionList []sessions.Session) []Project {
 	running := map[string]string{}
 	for _, s := range sessionList {
 		running[s.Name] = s.ID
@@ -72,7 +76,7 @@ func listProjects(r tmux.Runner, settings *config.Settings) ([]Project, error) {
 		names[d.Name] = true
 	}
 	projects = appendZoxideProjects(projects, names, running, settings)
-	return projects, nil
+	return projects
 }
 
 // appendZoxideProjects folds zoxide's directory list into projects, skipping

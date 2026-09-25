@@ -291,10 +291,48 @@ func TestDeriveCloneDir(t *testing.T) {
 		{"https://github.com/jskoll/wyrm", "wyrm"},
 		{"https://github.com/jskoll/wyrm/", "wyrm"},
 		{"git@github.com:jskoll/wyrm.git", "wyrm"},
+		{"git@host:repo.git", "repo"},
 	}
 	for _, tt := range tests {
 		if got := deriveCloneDir(tt.repo); got != tt.want {
 			t.Errorf("deriveCloneDir(%q) = %q, want %q", tt.repo, got, tt.want)
+		}
+	}
+}
+
+func TestConfigCommandsIncludesExecutablePaneTitle(t *testing.T) {
+	enabled := true
+	cfg := &config.Config{}
+	cfg.Session.EnablePaneTitles = &enabled
+	cfg.Session.PaneTitleFormat = "#(touch /tmp/owned)"
+	commands := configCommands(cfg)
+	if len(commands) != 1 || !strings.Contains(commands[0], "pane_title_format") {
+		t.Fatalf("commands = %v, want pane title command substitution", commands)
+	}
+}
+
+func TestClonePaneTitleCommandRequiresConfirmation(t *testing.T) {
+	installFakeGit(t)
+	base := t.TempDir()
+	chdir(t, base)
+	dest := filepath.Join(base, "title-command")
+	if err := os.MkdirAll(dest, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := "[session]\nname = \"title-command\"\nroot = \".\"\nenable_pane_titles = true\npane_title_format = \"#(touch /tmp/owned)\"\n[[windows]]\nname = \"w\"\n"
+	if err := os.WriteFile(filepath.Join(dest, config.DefaultFileName), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r := &fakeRunner{}
+	var stdout, stderr bytes.Buffer
+	code := runWith(withStdin("n\n"), []string{"clone", "https://example.com/x.git", "title-command"},
+		&stdout, &stderr, r, func() bool { return false }, nil)
+	if code != 0 || !strings.Contains(stderr.String(), "pane_title_format") {
+		t.Fatalf("clone result = %d, stderr = %q", code, stderr.String())
+	}
+	for _, call := range r.calls {
+		if len(call) > 0 && call[0] == "new-session" {
+			t.Fatalf("declined pane-title command still started a session: %v", call)
 		}
 	}
 }

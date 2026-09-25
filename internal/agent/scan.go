@@ -39,3 +39,30 @@ func Candidates(refs []tmux.PaneRef, profiles []Profile, skipPane string, limit 
 	}
 	return selected, skipped
 }
+
+// Detection pairs a captured pane with its recognized state.
+type Detection struct {
+	Ref   tmux.PaneRef
+	State State
+}
+
+// Scan applies the same capture and classification policy to status and the TUI.
+func Scan(r tmux.Runner, refs []tmux.PaneRef, profiles []Profile, skipPane string, limit int) ([]Detection, int) {
+	candidates, skipped := Candidates(refs, profiles, skipPane, limit)
+	cmds := make([][]string, len(candidates))
+	for i, ref := range candidates {
+		cmds[i] = tmux.CapturePanePlainArgs(ref.PaneID)
+	}
+	contents := tmux.RunOutputs(r, cmds)
+	var detected []Detection
+	for i, ref := range candidates {
+		if i >= len(contents) || contents[i] == "" {
+			continue
+		}
+		state := Detect(ref.Command, contents[i], profiles)
+		if state != StateNone && state != StateUnknown {
+			detected = append(detected, Detection{Ref: ref, State: state})
+		}
+	}
+	return detected, skipped
+}

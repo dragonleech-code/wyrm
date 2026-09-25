@@ -4,7 +4,65 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
+
+func TestMarkStartedRecoversStaleLock(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	s, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock := s.Path() + ".lock"
+	if err := os.MkdirAll(filepath.Dir(lock), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(lock, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-2 * lockStaleAfter)
+	if err := os.Chtimes(lock, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MarkStarted("/proj/a"); err != nil {
+		t.Fatal(err)
+	}
+	if !s.Started("/proj/a") {
+		t.Fatal("recovered lock did not persist start")
+	}
+	if _, err := os.Stat(lock); !os.IsNotExist(err) {
+		t.Fatalf("lock still present: %v", err)
+	}
+}
+
+func TestProjectLockRefreshesHistoryAfterAnotherStart(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	first, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	unlock, err := first.LockProject("/proj/a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := first.MarkStarted("/proj/a"); err != nil {
+		unlock()
+		t.Fatal(err)
+	}
+	unlock()
+	secondUnlock, err := second.LockProject("/proj/a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer secondUnlock()
+	if !second.Started("/proj/a") {
+		t.Fatal("second process did not see completed first start")
+	}
+}
 
 func TestLoadMissingFileReturnsEmptyStore(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())

@@ -59,21 +59,16 @@ func TestListParses(t *testing.T) {
 	}
 }
 
-// A row whose ID isn't a well-formed tmux session id is dropped rather than
-// carried forward: everything downstream targets tmux by that ID.
-func TestListSkipsMalformedRows(t *testing.T) {
+// Malformed records must fail rather than silently omitting live sessions.
+func TestListRejectsMalformedRows(t *testing.T) {
 	r := &stubRunner{out: strings.Join([]string{
 		"$1|1|0|100|good",
 		"notanid|1|0|200|bogus",
 		"|1|0|300|empty",
 		"$2|1|0|400|alsogood",
 	}, "\n")}
-	got, err := List(r)
-	if err != nil {
-		t.Fatalf("List: %v", err)
-	}
-	if len(got) != 2 {
-		t.Fatalf("got %d sessions (%+v), want the 2 well-formed ones", len(got), got)
+	if _, err := List(r); err == nil {
+		t.Fatal("List accepted a malformed session ID")
 	}
 }
 

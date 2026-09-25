@@ -512,6 +512,15 @@ func (s *Settings) SharedConfigPath(dir string) (string, error) {
 	}
 	plain := filepath.Join(sharedDir, filepath.Base(abs)+DefaultFileName)
 	if owner, known := SharedConfigOwner(plain); known && !SamePath(owner, abs) {
+		// Older shared configs did not record project_dir. Their session root
+		// can be a subdirectory of the project that owns the plain filename.
+		// Preserve that filename when the root lies below the requested dir.
+		if cfg, loadErr := Load(plain); loadErr == nil && cfg.Session.ProjectDir == "" {
+			rel, relErr := filepath.Rel(canonicalPath(abs), canonicalPath(owner))
+			if relErr == nil && rel != ".." && !filepath.IsAbs(rel) && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				return plain, nil
+			}
+		}
 		return filepath.Join(sharedDir, filepath.Base(abs)+"-"+shortPathHash(canonicalPath(abs))+DefaultFileName), nil
 	}
 	return plain, nil

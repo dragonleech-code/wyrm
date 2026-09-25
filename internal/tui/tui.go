@@ -296,13 +296,19 @@ func (m Model) Init() tea.Cmd {
 // It returns the commands rather than a tea.Batch of them so callers can splice
 // in their own without nesting one batch inside another.
 func (m Model) refreshLists() []tea.Cmd {
-	return []tea.Cmd{loadProjects(m.runner, m.settings), loadSessions(m.runner), m.agentCmd()}
+	return []tea.Cmd{loadLists(m.runner, m.settings), m.agentCmd()}
 }
 
 // --- messages ---
 
 type sessionsMsg struct {
 	sessions []sessions.Session
+	err      error
+}
+
+type listsMsg struct {
+	sessions []sessions.Session
+	projects []Project
 	err      error
 }
 
@@ -350,6 +356,16 @@ func loadSessions(r tmux.Runner) tea.Cmd {
 	return func() tea.Msg {
 		s, err := sessions.List(r)
 		return sessionsMsg{sessions: s, err: err}
+	}
+}
+
+func loadLists(r tmux.Runner, settings *config.Settings) tea.Cmd {
+	return func() tea.Msg {
+		list, err := sessions.List(r)
+		if err != nil {
+			return listsMsg{err: err}
+		}
+		return listsMsg{sessions: list, projects: projectsFromSessions(settings, list)}
 	}
 }
 
@@ -674,6 +690,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case clipboardMsg:
 		m.copyResult(msg.what, msg.err)
 		return m, nil
+	case notificationErrorMsg:
+		m.err = msg.err
+		return m, nil
 
 	case tea.MouseMsg:
 		return m.handleMouse(msg)
@@ -682,40 +701,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// A failed scan keeps the previous markers rather than clearing them or
 		// claiming the footer: this is an optional decoration polled on a timer,
 		// and one unlucky tmux call shouldn't wipe an error the user is reading.
-		if msg.err == nil {
-			var notifyCmds []tea.Cmd
-			if m.settings != nil && m.settings.AgentNotifyEnabled() && m.prevPaneStates != nil {
-				cfg := agent.NotifyConfig{
-					Enabled:   m.settings.AgentNotifyEnabled(),
-					Desktop:   m.settings.AgentNotifyDesktop(),
-					Bell:      m.settings.AgentNotifyBell(),
-					OSC:       m.settings.AgentNotifyOSC(),
-					OnBlocked: m.settings.AgentNotifyOnBlocked(),
-					OnIdle:    m.settings.AgentNotifyOnIdle(),
-					Command:   m.settings.AgentNotifyCommand(),
-				}
-				for paneID, state := range msg.status.panes {
-					prevState := m.prevPaneStates[paneID]
-					if state != prevState && (state == agent.StateBlocked || state == agent.StateIdle) {
-						ref := msg.status.refs[paneID]
-						n := agent.Notification{
-							State:       state,
-							PaneID:      paneID,
-							SessionName: ref.SessionName,
-							WindowName:  ref.WindowName,
-						}
-						notifyCmds = append(notifyCmds, notificationCmd(n, cfg))
-					}
-				}
-			}
-			m.prevPaneStates = make(map[string]agent.State, len(msg.status.panes))
-			for k, v := range msg.status.panes {
-				m.prevPaneStates[k] = v
-			}
-			m.agents = msg.status
-			if len(notifyCmds) > 0 {
-				return m, tea.Batch(notifyCmds...)
-			}
+		if msg.err != nil {
+			return m, nil
+		}
+		notifyCmds := m.agentTransitionCommands(msg.status)
+		m.prevPaneStates = make(map[string]agent.State, len(msg.status.panes))
+		for k, v := range msg.status.panes {
+			m.prevPaneStates[k] = v
+		}
+		m.agents = msg.status
+		if len(notifyCmds) > 0 {
+			return m, tea.Batch(notifyCmds...)
 		}
 		return m, nil
 
@@ -791,6 +787,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.updatePreview()
 		}
 		return m, nil
+
+	case listsMsg:
+		if msg.err != nil {
+			m.err = msg.err
+			return m, nil
+		}
+		updated, projectCmd := m.Update(projectsMsg{projects: msg.projects})
+		m = updated.(Model)
+		updated, sessionCmd := m.Update(sessionsMsg{sessions: msg.sessions})
+		m = updated.(Model)
+		return m, tea.Batch(projectCmd, sessionCmd)
 
 	case configPreviewMsg:
 		if m.previewSrc != previewConfig {

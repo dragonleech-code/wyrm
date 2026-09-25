@@ -345,7 +345,7 @@ At least one of `name` / `root` is required.
 
 `on_project_start` always fires on a fresh build. Alongside it, exactly one
 of these two also fires, based on whether this project (identified by its
-config file's directory) has ever started a session before — tracked in
+resolved session root) has ever started a session before — tracked in
 `~/.config/wyrm/state.toml` (`$XDG_CONFIG_HOME/wyrm/state.toml` if set), so
 the distinction survives a `wyrm kill` and holds across process runs, not
 just within one.
@@ -530,7 +530,7 @@ name = "dev"
 
 !!! warning "Deprecated"
     The flat `panes` list (and the `.tmuxconfig` filename) are retained for
-    backward compatibility but are slated for removal in 1.0. New configs
+    backward compatibility. New configs
     should use the `splits` tree, which is strictly more expressive.
     `wyrm save` only ever emits `splits`.
 

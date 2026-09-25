@@ -17,7 +17,7 @@ func (r *sendTestRunner) Run(args ...string) (string, error) {
 		return "$1|myproj\n$2|other", nil
 	}
 	if args[0] == "list-windows" {
-		return "0|@1|1|layout|editor\n1|@2|0|layout|server", nil
+		return "0|@1|1|layout|editor\n1|@2|0|layout|server\n2|@3|0|layout|api.v2", nil
 	}
 	if args[0] == "list-panes" {
 		return "%10|0|1|bash\n%11|1|0|node", nil
@@ -52,6 +52,13 @@ func TestSendValidation(t *testing.T) {
 }
 
 func TestSendExecution(t *testing.T) {
+	t.Run("dotted window name", func(t *testing.T) {
+		r := &sendTestRunner{}
+		id, err := resolveSendTarget(r, "myproj:api.v2")
+		if err != nil || id != "@3" {
+			t.Fatalf("target = %q, %v; want @3", id, err)
+		}
+	})
 	t.Run("default send appends Enter", func(t *testing.T) {
 		r := &sendTestRunner{}
 		var stdout, stderr bytes.Buffer

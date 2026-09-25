@@ -159,7 +159,7 @@ ok    editor           nvim
 warn  clipboard        no backend found
                        → install one of wl-copy, xclip, xsel; until then "y" in the TUI cannot copy
 note  zoxide           disabled (zoxide.enabled = false)
-note  release signing  no key compiled in; `wyrm selfupdate` verifies checksums only
+ok    release signing  public key compiled in; releases are signature-verified
 
 1 error, 3 warnings
 ```

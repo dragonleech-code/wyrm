@@ -9,8 +9,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/jskoll/wyrm/internal/tmux"
 )
 
 // Project is a discoverable wyrm config: the session name it would produce and
@@ -202,9 +200,8 @@ func DiscoverWildcardProjects(settings *Settings) []Project {
 			}
 			if local != "" {
 				p := Project{Name: filepath.Base(dir), Path: local, Root: dir}
-				if cfg, err := Load(local); err == nil {
-					p.Name = projectNameFrom(cfg, local, false)
-					p.Aliases = cfg.Session.Aliases
+				if info, err := os.Stat(local); err == nil {
+					p.Name, p.Aliases = cachedProjectInfo(local, false, info)
 				}
 				out = append(out, p)
 				continue
@@ -408,22 +405,6 @@ func (ix ProjectIndex) Find(name string) (Project, bool) {
 	}
 	p, ok := ix.byAlias[name]
 	return p, ok
-}
-
-// FindSession matches a live session's identity, never another project's alias.
-// Exact names win over tmux's substituted spelling.
-func (ix ProjectIndex) FindSession(name string) (Project, bool) {
-	for _, p := range ix.projects {
-		if p.Name == name {
-			return p, true
-		}
-	}
-	for _, p := range ix.projects {
-		if tmux.SanitizeName(p.Name) == name {
-			return p, true
-		}
-	}
-	return Project{}, false
 }
 
 // Projects returns the discovered projects in discovery order.

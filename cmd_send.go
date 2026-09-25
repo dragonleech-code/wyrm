@@ -93,13 +93,7 @@ func resolveSendTarget(r tmux.Runner, target string) (string, error) {
 	winName := ""
 	paneSpec := ""
 	if hasColon {
-		winPart, panePart, hasDot := strings.Cut(rest, ".")
-		if hasDot {
-			winName = winPart
-			paneSpec = panePart
-		} else {
-			winName = rest
-		}
+		winName = rest
 	}
 
 	sessID, ok, err := tmux.FindSessionID(r, sessName)
@@ -124,6 +118,19 @@ func resolveSendTarget(r tmux.Runner, target string) (string, error) {
 		if strings.EqualFold(w.Name, winName) || w.ID == winName {
 			targetWin = w
 			break
+		}
+	}
+	// An exact window name wins over interpreting a dot as a pane suffix.
+	if targetWin == nil {
+		if winPart, panePart, hasDot := strings.Cut(rest, "."); hasDot {
+			winName, paneSpec = winPart, panePart
+			for i := range windows {
+				w := &windows[i]
+				if strings.EqualFold(w.Name, winName) || w.ID == winName {
+					targetWin = w
+					break
+				}
+			}
 		}
 	}
 	if targetWin == nil {

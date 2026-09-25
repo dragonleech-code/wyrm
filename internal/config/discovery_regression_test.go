@@ -45,13 +45,3 @@ func TestWildcardOwnConfigAndWorktreeIdentity(t *testing.T) {
 		}
 	}
 }
-
-func TestProjectIndexLiveIdentityIgnoresAliases(t *testing.T) {
-	ix := ProjectIndex{projects: []Project{{Name: "one", Aliases: []string{"two"}}, {Name: "a.b"}}}
-	if _, ok := ix.FindSession("two"); ok {
-		t.Fatal("live name matched an unrelated alias")
-	}
-	if p, ok := ix.FindSession("a_b"); !ok || p.Name != "a.b" {
-		t.Fatal("sanitized name did not match")
-	}
-}

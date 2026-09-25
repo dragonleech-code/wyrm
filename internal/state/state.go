@@ -10,6 +10,8 @@
 package state
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -90,6 +92,59 @@ func (s *Store) Started(dir string) bool {
 	return s.started[dir]
 }
 
+// LockProject serializes the full startup lifecycle for one resolved root.
+// Refreshing under this lock makes a concurrent process's completed start
+// visible to a Store loaded before that process acquired the lock.
+func (s *Store) LockProject(dir string) (func(), error) {
+	if s == nil || dir == "" {
+		return func() {}, nil
+	}
+	sum := sha256.Sum256([]byte(dir))
+	unlock, err := lockFileWithTimeout(s.path+".start-"+hex.EncodeToString(sum[:8]), 10*time.Minute)
+	if err != nil {
+		return nil, err
+	}
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case now := <-ticker.C:
+				_ = os.Chtimes(s.path+".start-"+hex.EncodeToString(sum[:8])+".lock", now, now)
+			}
+		}
+	}()
+	release := func() { close(stop); <-done; unlock() }
+	if err := s.refresh(); err != nil {
+		release()
+		return nil, err
+	}
+	return release, nil
+}
+
+func (s *Store) refresh() error {
+	data, err := os.ReadFile(s.path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var ff fileFormat
+	if err := toml.Unmarshal(data, &ff); err != nil {
+		return fmt.Errorf("reading project history: %w", err)
+	}
+	for _, dir := range ff.Started {
+		s.started[dir] = true
+	}
+	return nil
+}
+
 // MarkStarted records dir as started and persists immediately — there is no
 // separate Save, because a start recorded but not yet on disk is exactly
 // the state a crash between the two would leave wrong.
@@ -150,11 +205,15 @@ const (
 // lockFile takes an exclusive lock for path via an O_EXCL sibling file, and
 // returns the function that releases it.
 func lockFile(path string) (func(), error) {
+	return lockFileWithTimeout(path, lockTimeout)
+}
+
+func lockFileWithTimeout(path string, timeout time.Duration) (func(), error) {
 	lock := path + ".lock"
 	if err := os.MkdirAll(filepath.Dir(lock), 0o755); err != nil {
 		return nil, err
 	}
-	deadline := time.Now().Add(lockTimeout)
+	deadline := time.Now().Add(timeout)
 	for {
 		f, err := os.OpenFile(lock, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 		if err == nil {

@@ -174,45 +174,31 @@ func collectStatus(runner tmux.Runner, sessionFilter string, profiles []agent.Pr
 		}
 		scoped = append(scoped, ref)
 	}
-	candidates, skipped := agent.Candidates(scoped, profiles, "", agent.MaxCaptures)
+	detections, skipped := agent.Scan(runner, scoped, profiles, "", agent.MaxCaptures)
 	report.Summary.Skipped = skipped
 
-	if len(candidates) > 0 {
-		cmds := make([][]string, len(candidates))
-		for i, ref := range candidates {
-			cmds[i] = tmux.CapturePanePlainArgs(ref.PaneID)
+	for _, detection := range detections {
+		ref, st := detection.Ref, detection.State
+		report.Summary.Total++
+		switch st {
+		case agent.StateBlocked:
+			report.Summary.Blocked++
+		case agent.StateIdle:
+			report.Summary.Idle++
+		case agent.StateBusy:
+			report.Summary.Busy++
 		}
-		contents := tmux.RunOutputs(runner, cmds)
-
-		for i, ref := range candidates {
-			if i >= len(contents) || contents[i] == "" {
-				continue
-			}
-			st := agent.Detect(ref.Command, contents[i], profiles)
-			if st == agent.StateNone || st == agent.StateUnknown {
-				continue
-			}
-			report.Summary.Total++
-			switch st {
-			case agent.StateBlocked:
-				report.Summary.Blocked++
-			case agent.StateIdle:
-				report.Summary.Idle++
-			case agent.StateBusy:
-				report.Summary.Busy++
-			}
-			report.Agents = append(report.Agents, agentStatusPane{
-				SessionID:   ref.SessionID,
-				SessionName: ref.SessionName,
-				WindowID:    ref.WindowID,
-				WindowName:  ref.WindowName,
-				WindowIndex: ref.WindowIndex,
-				PaneID:      ref.PaneID,
-				PaneIndex:   ref.PaneIndex,
-				Command:     ref.Command,
-				State:       st.String(),
-			})
-		}
+		report.Agents = append(report.Agents, agentStatusPane{
+			SessionID:   ref.SessionID,
+			SessionName: ref.SessionName,
+			WindowID:    ref.WindowID,
+			WindowName:  ref.WindowName,
+			WindowIndex: ref.WindowIndex,
+			PaneID:      ref.PaneID,
+			PaneIndex:   ref.PaneIndex,
+			Command:     ref.Command,
+			State:       st.String(),
+		})
 	}
 
 	return report, nil
