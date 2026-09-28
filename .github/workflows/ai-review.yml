@@ -1,26 +1,15 @@
-name: AI review
+name: AI review (manual)
 
-# Thin caller for the org's shared reviewer:
-# https://github.com/dragonleech-code/ai-review
-#
-# Runs automatically when a PR is opened from a branch of this repo (drafts,
-# Dependabot and fork PRs excluded). Anything else, including a fork PR, is
-# reviewed on demand by an admin:
-#   gh workflow run ai-review.yml -f pr_number=123 [-f model=<model-id>]
-#
-# The model and API key are organization-level settings; nothing to configure
-# here. See that repo's README.
-
+# The organization ruleset runs AI review on pull requests. This workflow is
+# the admin-only manual path for fork PRs or a requested re-review.
 on:
-  pull_request:
-    types: [opened]
   workflow_dispatch:
     inputs:
       pr_number:
         description: PR number to review
         required: true
       model:
-        description: Model ID override (blank = AI_REVIEW_MODEL)
+        description: Model ID override (blank = choose by filtered diff size)
         required: false
       effort:
         description: Reasoning effort override (blank = AI_REVIEW_EFFORT)
@@ -31,14 +20,14 @@ permissions:
   pull-requests: write
 
 concurrency:
-  group: ai-review-${{ github.event.pull_request.number || inputs.pr_number }}-${{ inputs.model || 'default' }}
+  group: manual-ai-review-${{ inputs.pr_number }}
   cancel-in-progress: true
 
 jobs:
   review:
     uses: dragonleech-code/ai-review/.github/workflows/ai-review.yml@v1
     with:
-      pr_number: ${{ github.event.pull_request.number || inputs.pr_number }}
+      pr_number: ${{ inputs.pr_number }}
       model: ${{ inputs.model }}
       effort: ${{ inputs.effort }}
     secrets: inherit
