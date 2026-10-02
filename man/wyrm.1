@@ -62,10 +62,18 @@ and a session name are mutually exclusive.
 .TP
 .B wyrm pick
 Fuzzy-pick a running session and attach to it.
+Ctrl-F opens native fuzzy search in the focused panel; Ctrl-Z searches
+Sessions and Windows across the tmux server.
 .TP
 .B wyrm tui
 Open the full-screen session manager: browse, preview, kill, rename, and
 start sessions.
+Ctrl-F opens native fuzzy search in the focused Projects, Sessions, Windows,
+or Panes panel. Ctrl-Z searches all panels, including windows and panes
+across the tmux server. Type to filter ranked results, use arrow keys to
+move, Enter to focus the result, and Esc to cancel. Press Enter again in
+the main view to attach or start the selection. No external search tool
+is required.
 .TP
 .BI "wyrm save [\-config " PATH "] [\-stdout] [\-n] [\-o " PATH ]
 Save the running session's current layout as this folder's config.

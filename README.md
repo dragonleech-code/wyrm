@@ -325,6 +325,7 @@ keys: anything you learn in one works in the other.
 | Key | Action |
 |---|---|
 | type | fuzzy-filter the focused panel |
+| `Ctrl-F` / `Ctrl-Z` | open native fuzzy search in the focused panel / across Sessions and Windows |
 | ↑ / ↓, `j` / `k` | move the selection |
 | `Enter` | attach to the selected session (or `switch-client` if you're already in tmux), landing on the selected window |
 | `Tab`, `1` / `2` | move between the Sessions and Windows panels |
@@ -347,8 +348,8 @@ keys: anything you learn in one works in the other.
 /wyr_
 ```
 
-Both interfaces are built into the binary — there's no dependency on `fzf` or
-any other external tool, keeping wyrm a single static binary. Colors come from
+Both interfaces, their `/` filters, and `Ctrl-F` / `Ctrl-Z` fuzzy search are
+built into the binary, with no external search dependency. Colors come from
 the same optional `theme.toml` the TUI uses.
 
 > **Note (changed in 0.6.0):** `pick` used to be a separate implementation with
@@ -418,6 +419,8 @@ project you are standing in, that is what to configure — see
 | `↑` / `↓`, `j` / `k` | move the selection in the focused panel |
 | `PgUp` / `PgDn`, `g` / `G` | move a screenful / jump to the first or last entry |
 | `/` | filter the focused panel (`Esc` clears it) |
+| `Ctrl-F` | open native fuzzy search in the focused panel |
+| `Ctrl-Z` | open native fuzzy search across all Projects, Sessions, Windows, and Panes |
 | `f` | find a pane across every session at once — see below |
 | `Enter` | attach — lands on the exact window/pane under the cursor (or, on Projects and on a stopped **Sessions** row, starts/attaches the config's session) |
 | `x` | kill the focused session / window / pane (or, on Projects, stop the session running `on_project_exit`) — with a confirm |
@@ -436,6 +439,19 @@ project you are standing in, that is what to configure — see
 | `m` | toggle mouse capture |
 | `?` | show the full keyboard-shortcut help overlay (scrollable) |
 | `q` / `Ctrl-C` | quit |
+
+`Ctrl-F` searches all rows in the active panel: Projects, Sessions, Windows
+of the selected session, or Panes of the selected window. `Ctrl-Z` includes
+projects and sessions plus windows and panes across the entire tmux server.
+In `wyrm pick`, it searches Sessions and Windows. Results include their type
+and parent names to distinguish identical names. Choose a result with `Enter`
+to focus it in wyrm, then use the usual `Enter` action to attach or start it.
+`Esc` or `Ctrl-C` in the overlay cancels without changing your selection or filter.
+An existing `/` query seeds the search; selecting a result clears that
+filter. These shortcuts also work while typing into `/`.
+Type to filter results, ranked by fuzzy match score. Use `↑` / `↓` or
+`Ctrl-P` / `Ctrl-N` to move, `PgUp` / `PgDn` to page, and `Ctrl-U` to clear
+the query. `Ctrl-F` / `Ctrl-Z` also switch scope within the overlay.
 
 Press `?` at any time for a full-screen cheat sheet of every binding — laid out
 in two columns, or one on a narrow terminal, and scrollable (`↑`/`↓` or `j`/`k`,
