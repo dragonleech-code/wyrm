@@ -6,6 +6,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Native fuzzy search in the TUI and picker: `Ctrl-F` searches the focused panel,
+  and `Ctrl-Z` searches all panels, including windows and panes across sessions.
+  Results are ranked as you type; choosing one focuses it for the usual attach
+  or start action, without requiring an external search tool.
+
 ### Fixed
 
 - Require confirmation for executable tmux pane title formats in cloned configs.

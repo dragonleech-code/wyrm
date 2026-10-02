@@ -101,6 +101,9 @@ func (m Model) View() string {
 	if m.ready && m.mode == modeFindPane {
 		return m.renderFindPaneOverlay()
 	}
+	if m.ready && m.mode == modeSearch {
+		return m.renderSearchOverlay()
+	}
 	if m.ready && m.mode == modePager {
 		return m.renderPagerOverlay()
 	}
@@ -461,6 +464,8 @@ var helpSections = []helpSection{
 		{"PgUp / PgDn", "move the selection a screenful"},
 		{"g / G", "jump to the first / last entry"},
 		{"/", "filter the focused panel"},
+		{"Ctrl-F", "fuzzy search in the focused panel"},
+		{"Ctrl-Z", "fuzzy search across all panels"},
 		{"f", "find a pane anywhere (full TUI)"},
 		{"p / [", "open scrollback pager and search"},
 		{"y", "copy selection to clipboard"},

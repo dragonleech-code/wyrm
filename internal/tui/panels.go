@@ -60,7 +60,7 @@ type panelSpec struct {
 }
 
 // navKeys is the part of the footer that never changes.
-const navKeys = "tab/1-4: focus  jk: move  /: filter  R: reload  ?: help  q: quit"
+const navKeys = "tab/1-4: focus  jk: move  /: filter  ^f/^z: search panel/all  R: reload  ?: help  q: quit"
 
 // panelSpecs is indexed by panel.
 var panelSpecs = [numPanels]panelSpec{

@@ -111,6 +111,8 @@ const (
 	modePager
 	// modeMoveWindow is the cross-session window transfer picker ("W").
 	modeMoveWindow
+	// modeSearch is the native fuzzy search overlay for one or all panels.
+	modeSearch
 )
 
 // Model is the Bubble Tea model for the TUI. It is a plain value type; Update
@@ -152,12 +154,20 @@ type Model struct {
 	selfPane string
 
 	// modal state.
-	mode          mode
-	pending       pendingAction
-	confirmPrompt string          // shown in modeConfirm
-	promptTitle   string          // label shown in modePrompt
-	textInput     textinput.Model // active in modePrompt
-	helpScroll    int             // top line offset of the help overlay (modeHelp)
+	mode             mode
+	searchReturnMode mode
+	searchEntries    []searchEntry
+	searchQuery      string
+	searchScope      string
+	searchCur        int
+	searchID         int
+	searchLoading    bool
+	searchResolving  bool
+	pending          pendingAction
+	confirmPrompt    string          // shown in modeConfirm
+	promptTitle      string          // label shown in modePrompt
+	textInput        textinput.Model // active in modePrompt
+	helpScroll       int             // top line offset of the help overlay (modeHelp)
 
 	// findPane* backs modeFindPane: the whole-server pane list, the typed
 	// filter (typing is always "on" here, unlike modeFilter's separate
@@ -680,6 +690,12 @@ func (m Model) setFocus(p panel) Model {
 // folds incoming messages into new state and returns follow-up commands.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case searchEntriesMsg:
+		return m.handleSearchEntries(msg)
+	case searchResultMsg:
+		return m.handleSearchResult(msg)
+	case searchLocationMsg:
+		return m.handleSearchLocation(msg)
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.ready = true
@@ -929,6 +945,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.mode == modeSearch {
+		return m.handleSearchKey(msg)
+	}
+	if m.mode == modeNormal || m.mode == modeFilter {
+		switch msg.String() {
+		case "ctrl+f":
+			return m.startSearch(false)
+		case "ctrl+z":
+			return m.startSearch(true)
+		}
+	}
 	switch m.mode {
 	case modeConfirm:
 		return m.handleConfirmKey(msg)
