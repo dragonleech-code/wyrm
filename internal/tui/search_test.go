@@ -75,6 +75,57 @@ func TestSearchLocationAcrossSessions(t *testing.T) {
 	}
 }
 
+func TestSearchSelectsNewRunningSessionWithoutAllSessions(t *testing.T) {
+	for _, targetPanel := range []panel{panelSessions, panelWindows, panelPanes} {
+		t.Run(targetPanel.spec().title, func(t *testing.T) {
+			m := New(funcRunner{fn: func(args ...string) (string, error) {
+				switch args[0] {
+				case "list-sessions":
+					return "$1|1|0|1|old\n$9|1|0|2|new\n", nil
+				case "list-windows":
+					if args[2] != "$9" {
+						t.Fatalf("window target = %q, want $9", args[2])
+					}
+					return "0|@9|1|layout|code\n", nil
+				case "list-panes":
+					if args[2] != "@9" {
+						t.Fatalf("pane target = %q, want @9", args[2])
+					}
+					return "%9|0|1|nvim|/new\n", nil
+				}
+				return "", nil
+			}}, nil)
+			// The target isn't in the old list and the active filter hides it.
+			m.sessions = []sessions.Session{{ID: "$1", Name: "old"}}
+			m.cur = [numPanels]int{}
+			m.mode, m.searchReturnMode = modeSearch, modeFilter
+			m.filter, m.filtering = "old", true
+			entry := searchEntry{panel: targetPanel, sessionID: "$9"}
+			if targetPanel >= panelWindows {
+				entry.windowID = "@9"
+			}
+			if targetPanel == panelPanes {
+				entry.paneID = "%9"
+			}
+			m.searchEntries = []searchEntry{entry}
+			m, cmd := update(m, tea.KeyMsg{Type: tea.KeyEnter})
+			if cmd == nil {
+				t.Fatal("selecting a running result did not refresh its hierarchy")
+			}
+			m, _ = update(m, run(cmd))
+			s, sok := m.currentSession()
+			w, wok := m.currentWindow()
+			p, pok := m.currentPane()
+			if !sok || !wok || !pok || s.ID != "$9" || w.ID != "@9" || p.ID != "%9" {
+				t.Fatalf("selection = %+v / %+v / %+v", s, w, p)
+			}
+			if m.mode != modeNormal || m.focus != targetPanel || m.filter != "" || m.allSessions {
+				t.Fatalf("selection state: mode=%v focus=%v filter=%q allSessions=%v", m.mode, m.focus, m.filter, m.allSessions)
+			}
+		})
+	}
+}
+
 func TestSearchCancelPreservesFilter(t *testing.T) {
 	m := mouseModel(t)
 	m.mode, m.searchReturnMode, m.filtering, m.filter = modeSearch, modeFilter, true, "web"

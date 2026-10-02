@@ -299,6 +299,8 @@ func (m Model) handleSearchLocation(msg searchLocationMsg) (tea.Model, tea.Cmd) 
 			next.windows, next.panes = nil, nil
 		}
 	} else {
+		// Every running session is visible regardless of allSessions, which
+		// only adds stopped projects. Refresh before locating the target ID.
 		next.sessions = msg.sessions
 		found := -1
 		for i, s := range next.sessionEntries() {
