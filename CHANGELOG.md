@@ -81,6 +81,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   which reports `#{window_layout}` as JSON.
 - The man page named the settings file `settings.toml` and the shared config
   directory as `wyrm/`; they are `config.toml` and `wyrm/settings/`.
+- The man page now documents `wyrm send` and `wyrm setup-tmux`, `-host`, and
+  `TMUX_CONF`; a test fails if a subcommand is added without a man page entry.
 
 ## [1.3.0] - 2026-10-02
 

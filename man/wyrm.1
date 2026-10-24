@@ -139,6 +139,32 @@ With
 .BR \-watch " (or " \-w ),
 continuously streams status updates.
 .TP
+.BI "wyrm send [\-l] [\-n] [\-r] " TARGET " " TEXT ...
+Type
+.I TEXT
+into
+.IR TARGET ,
+a session, window, or pane given as
+.IB session [: window [. pane ]]
+or a tmux ID, then press Enter.
+.B \-n
+.RB ( \-no\-enter )
+leaves Enter off.
+.B \-r
+.RB ( \-raw )
+sends tmux key names such as
+.B C\-c
+or
+.B Escape
+instead of literal characters;
+.B \-l
+.RB ( \-literal )
+states the default and cannot be combined with
+.BR \-r .
+Put
+.B \-\-
+before text that starts with a dash.
+.TP
 .BI "wyrm list [\-format " FMT ]
 List running tmux sessions non-interactively.
 .I FMT
@@ -199,6 +225,22 @@ reports whether an update is available without installing it.
 installs that version instead of the latest.
 Refuses if the running binary looks package-managed (Homebrew, dpkg, rpm,
 or pacman/AUR); use that package manager's own upgrade command instead.
+.TP
+.BI "wyrm setup\-tmux [\-a] [\-key\-pick " KEY "] [\-key\-tui " KEY "] [\-status=false]"
+Print a tmux.conf snippet that opens
+.B wyrm pick
+.RB (prefix " C\-j" )
+and
+.B wyrm tui
+.RB (prefix " C\-w" )
+in popups and shows agent status in
+.BR status\-right .
+.B \-a
+.RB ( \-append )
+appends it to your tmux.conf instead, after backing that file up, and does
+nothing if the snippet is already there.
+.B \-status=false
+leaves out the status bar line.
 .TP
 .B "wyrm doctor [\-strict]"
 Check wyrm's environment and configuration and report anything broken or
@@ -261,7 +303,15 @@ Path to the config file to use, overriding discovery. Accepted by
 .B \-n
 Dry run: print the tmux commands and lifecycle hooks that would run,
 without touching tmux. Accepted by
-.BR up ", " restart ", and " kill .
+.BR up ", " restart ", and " kill ;
+.B save \-n
+previews instead of writing.
+.TP
+.BI \-host " HOST"
+Build or kill the session on
+.I HOST
+over ssh. Accepted by
+.BR up " and " kill .
 .TP
 .B \-d
 Build (or reattach to) the session without attaching. Accepted by
@@ -331,6 +381,15 @@ to run every config without a trust prompt, for scripts and CI.
 .BR WYRM_TMUX_SOCKET ", " WYRM_TMUX_COMMAND
 Override
 .BR [tmux].socket " and " [tmux].command .
+.TP
+.B TMUX_CONF
+The tmux.conf that
+.B wyrm setup\-tmux \-a
+appends to, overriding the
+.B $XDG_CONFIG_HOME/tmux/tmux.conf
+then
+.B ~/.tmux.conf
+lookup.
 .SH EXIT STATUS
 .TP
 .B 0
