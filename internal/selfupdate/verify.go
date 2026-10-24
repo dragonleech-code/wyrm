@@ -21,10 +21,8 @@ import (
 //
 // The key is public, so it lives in the repository rather than in a build
 // secret; only the matching secret key is held by the release workflow. When
-// the file carries no key (its committed placeholder state), no key is
-// embedded and selfupdate says so out loud rather than quietly verifying
-// nothing — which is exactly what it used to do, because DefaultSigningPublicKey
-// was declared and then never assigned in any build.
+// the file carries no key, no key is embedded and selfupdate says so out loud
+// rather than quietly verifying nothing.
 //
 //go:embed signing.pub
 var signingPubFile []byte
@@ -59,9 +57,8 @@ func SigningKeyFromEd25519(pub ed25519.PublicKey) SigningKey {
 }
 
 // minisign algorithm tags. "Ed" signs the message itself; "ED" signs its
-// BLAKE2b-512 hash. Current minisign (0.12) emits "ED" by default — verifying
-// a real minisign signature as though it were "Ed" fails every time, which is
-// the second half of why signature verification here has never worked.
+// BLAKE2b-512 hash. Current minisign (0.12) emits "ED" by default, so both
+// have to be accepted.
 const (
 	algoLegacy  = "Ed"
 	algoPrehash = "ED"

@@ -63,6 +63,10 @@ type Settings struct {
 	Wildcard  []Wildcard        `toml:"wildcard,omitempty"`
 	Zoxide    Zoxide            `toml:"zoxide"`
 	Discovery DiscoverySettings `toml:"discovery"`
+	Trust     TrustSettings     `toml:"trust"`
+	// Workspaces are named groups of projects started or stopped together
+	// with `wyrm @name`. See Workspace.
+	Workspaces []Workspace `toml:"workspace,omitempty"`
 
 	// warnings collects unknown top-level keys found while parsing this
 	// settings file (see LoadSettings), mirroring Config.warnings.
@@ -74,6 +78,73 @@ type DiscoverySettings struct {
 	// Upward enables traversing up parent directories to find .wyrm.toml.
 	// Defaults to true.
 	Upward *bool `toml:"upward"`
+}
+
+// TrustSettings configures the trust prompt for project configs (see
+// internal/trust).
+type TrustSettings struct {
+	// Enabled asks before running a project config from outside the user's
+	// own wyrm directories. Defaults to true.
+	Enabled *bool `toml:"enabled"`
+}
+
+// TrustEnabled reports whether project configs need a trust decision.
+// Nil-safe; defaults to true.
+func (s *Settings) TrustEnabled() bool {
+	if s == nil || s.Trust.Enabled == nil {
+		return true
+	}
+	return *s.Trust.Enabled
+}
+
+// Workspace is a named group of projects, started or stopped together.
+type Workspace struct {
+	Name string `toml:"name"`
+	// Projects are project names or aliases, as `wyrm <name>` takes them.
+	// The first is the one attached to after starting.
+	Projects []string `toml:"projects"`
+}
+
+// FindWorkspace returns the workspace called name. Nil-safe.
+func (s *Settings) FindWorkspace(name string) (Workspace, bool) {
+	if s == nil {
+		return Workspace{}, false
+	}
+	for _, w := range s.Workspaces {
+		if w.Name == name {
+			return w, true
+		}
+	}
+	return Workspace{}, false
+}
+
+// OwnedPath reports whether path lies in a place only the user's own wyrm
+// configuration puts files: the wyrm config directory, the shared config
+// directory, or a [[wildcard]] template the settings name. Such a config was
+// written or chosen by the user, so it never needs a trust decision.
+func (s *Settings) OwnedPath(path string) bool {
+	abs := canonicalPath(path)
+	var roots []string
+	if dir, err := UserConfigDir(); err == nil {
+		roots = append(roots, filepath.Join(dir, "wyrm"))
+	}
+	if s != nil {
+		if dir, err := s.ResolvedSharedDir(); err == nil {
+			roots = append(roots, dir)
+		}
+		for _, w := range s.Wildcard {
+			if p, err := ExpandPath(w.Config); err == nil && SamePath(p, abs) {
+				return true
+			}
+		}
+	}
+	for _, root := range roots {
+		rel, err := filepath.Rel(canonicalPath(root), abs)
+		if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel) {
+			return true
+		}
+	}
+	return false
 }
 
 // UpwardDiscoveryEnabled returns true unless discovery.upward is explicitly false.
@@ -216,9 +287,8 @@ type AgentNotify struct {
 	// Command is an optional shell command to execute for notifications. It
 	// runs via $SHELL with the notification in the environment as
 	// WYRM_NOTIFY_TITLE, _MESSAGE, _STATE, _SESSION and _PANE — see
-	// agent.BuildCustomNotifyCommand. This comment previously promised
-	// {title}/{message}/{state}/{session}/{pane} placeholder expansion, which
-	// nothing has ever implemented.
+	// agent.BuildCustomNotifyCommand. Nothing is substituted into the command
+	// text itself, which is what keeps a crafted window name out of the shell.
 	//
 	// Setting this replaces the desktop notification rather than adding to it:
 	// agent.Dispatch returns once the command has run.
@@ -234,6 +304,8 @@ type AgentProfile struct {
 	Blocked     []string `toml:"blocked"`
 	Idle        []string `toml:"idle"`
 	BusyPattern string   `toml:"busy_pattern"`
+	// Approve are the tmux key names that accept the agent's blocked prompt.
+	Approve []string `toml:"approve"`
 }
 
 // MouseEnabled reports whether the TUI should start with the mouse captured.
@@ -433,10 +505,9 @@ func UserConfigDir() (string, error) {
 // (StorageLocal) when it doesn't exist.
 //
 // Parsing is strict (DisallowUnknownFields), the same as a project config
-// (see decode): a misspelled key here used to be silently dropped, which
-// meant e.g. "[[widcard]]" would parse clean and just never take effect. The
-// resulting Settings.Warnings() are printed once, by main, rather than at
-// every one of this function's call sites.
+// (see decode), so a misspelled key like "[[widcard]]" is reported rather than
+// silently never taking effect. The resulting Settings.Warnings() are printed
+// once, by main, rather than at every one of this function's call sites.
 func LoadSettings() (*Settings, error) {
 	path, err := SettingsPath()
 	if err != nil {
@@ -531,12 +602,12 @@ func (s *Settings) SharedConfigPath(dir string) (string, error) {
 //
 // A plain string comparison is not enough: os.Getwd returns a symlink-resolved
 // path while a config's session.root is whatever the user typed, so on macOS
-// (/var -> /private/var) or any setup with a symlinked home, a project failed
-// to recognise its own shared config and fell through to discovery.
+// (/var -> /private/var) or any setup with a symlinked home, a project would
+// fail to recognise its own shared config.
 //
-// Exported because every comparison against SharedConfigOwner needs it —
-// `wyrm migrate-config` used == and could therefore tell you a file belonged
-// to another project when it was your own, spelled differently.
+// Exported because every comparison against SharedConfigOwner needs it: with
+// ==, `wyrm migrate-config` would call your own file another project's when
+// the two paths are spelled differently.
 func SamePath(a, b string) bool {
 	return a == b || canonicalPath(a) == canonicalPath(b)
 }
@@ -557,8 +628,8 @@ func canonicalPath(p string) string {
 // Only an absolute session.root identifies a project. A missing root, or a
 // relative one — which resolves against the shared directory and is what
 // CheckSharedRoot warns about — is reported as unknown, and every caller
-// treats unknown as "assume it is ours". That is what keeps configs written
-// before this existed working exactly as they did.
+// treats unknown as "assume it is ours", so configs that predate project_dir
+// keep working.
 func SharedConfigOwner(path string) (string, bool) {
 	cfg, err := Load(path)
 	if err != nil || cfg == nil {

@@ -26,8 +26,12 @@ jobs:
       # if either is missing — the failure mode this replaces was a release
       # that shipped with verification code and nothing to verify.
       - name: Set up release signing
+        # Secrets reach the script through env, never ${{ }} interpolation into
+        # its text: an interpolated value becomes part of the shell source, so
+        # a quote or $(...) in it would be executed.
         env:
           MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
         run: |
           set -euo pipefail
           if [ -z "${MINISIGN_SECRET_KEY}" ]; then
@@ -42,7 +46,7 @@ jobs:
           # The embedded public key must match the signing key, or every
           # `wyrm selfupdate` on this release would reject its own signature.
           printf 'signing key check\n' > /tmp/keycheck.txt
-          minisign -Sm /tmp/keycheck.txt -s /tmp/minisign.key <<< "${{ secrets.MINISIGN_PASSWORD }}"
+          minisign -Sm /tmp/keycheck.txt -s /tmp/minisign.key <<< "${MINISIGN_PASSWORD}"
           minisign -Vm /tmp/keycheck.txt -p internal/selfupdate/signing.pub
       - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7
         with:
@@ -59,6 +63,9 @@ jobs:
     name: Publish AUR package
     needs: release
     runs-on: ubuntu-latest
+    # Only reads the release it publishes; pushing to the AUR uses its own key.
+    permissions:
+      contents: read
     steps:
       # The `secrets` context is not available in a job-level `if:`, so the
       # gate has to be a step. Without a deploy key configured the rest of the

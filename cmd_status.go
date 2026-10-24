@@ -50,7 +50,7 @@ type agentStatusReport struct {
 
 func (a *app) status(args []string) error {
 	fs := a.newFlagSet("status")
-	format := fs.String("format", "text", "output format: text, json, tmux, waybar, sketchybar")
+	format := fs.String("format", "text", "output format: text, json, jsonl, tmux, waybar, sketchybar")
 	sessionFilter := fs.String("session", "", "filter to a specific session by name or ID")
 	verbose := fs.Bool("v", false, "verbose text output")
 	watchLong := fs.Bool("watch", false, "continuously stream status output")
@@ -65,15 +65,13 @@ func (a *app) status(args []string) error {
 	}
 
 	watch := *watchLong || *watchShort
-	// time.NewTicker panics on a non-positive duration, so a plain typo
-	// (`-interval 0`) used to reach the user as a stack trace. Exit 2, like
-	// every other bad flag value.
+	// time.NewTicker panics on a non-positive duration; a typo like
+	// `-interval 0` is a usage error (exit 2), not a stack trace.
 	if watch && *interval <= 0 {
 		return usageErrf("-interval must be positive, got %s", *interval)
 	}
 
-	// The error was previously discarded here, so a malformed settings file
-	// silently produced "no active agents" with no explanation.
+	// A malformed settings file is an error, not "no active agents".
 	settings, err := config.LoadSettings()
 	if err != nil {
 		return err
@@ -99,10 +97,8 @@ func (a *app) status(args []string) error {
 	}
 
 	// Collect and format once up front, outside the loop, so a bad -format
-	// (or any other collection failure) fails the way it does without
-	// -watch — the loop below used to swallow every iteration's error
-	// silently, so a typo'd -format looped forever printing nothing at all,
-	// with a zero exit code, until interrupted.
+	// (or any other collection failure) fails the way it does without -watch
+	// instead of looping forever on an error the loop only warns about.
 	report, err := collectStatus(a.runner, *sessionFilter, profiles)
 	if err != nil {
 		return err
@@ -211,6 +207,11 @@ func formatStatus(w io.Writer, format string, verbose bool, report agentStatusRe
 		enc.SetIndent("", "  ")
 		return enc.Encode(report)
 
+	case "jsonl":
+		// One compact object per line: with --watch, a stream a status bar or
+		// editor plugin can read line by line.
+		return json.NewEncoder(w).Encode(report)
+
 	case "tmux":
 		var parts []string
 		if report.Summary.Blocked > 0 {
@@ -315,6 +316,6 @@ func formatStatus(w io.Writer, format string, verbose bool, report agentStatusRe
 		return nil
 
 	default:
-		return usageErrf("unknown format %q (want text, json, tmux, waybar, sketchybar)", format)
+		return usageErrf("unknown format %q (want text, json, jsonl, tmux, waybar, sketchybar)", format)
 	}
 }

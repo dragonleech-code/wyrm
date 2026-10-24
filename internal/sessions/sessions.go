@@ -2,11 +2,10 @@
 // sessions, killing one, formatting a row, and the fuzzy matcher every list in
 // wyrm filters with.
 //
-// It exists as its own package because these are the things both user
-// interfaces and the plain `wyrm list` need, and they used to live in
-// internal/picker — so the TUI imported a UI package to get at a struct
-// definition, and a change to either one reached further than it should.
-// Nothing here draws anything or touches a terminal.
+// It is its own package because both user interfaces and the plain
+// `wyrm list` need these, and none of them should have to import a UI package
+// to get at a struct definition. Nothing here draws anything or touches a
+// terminal.
 package sessions
 
 import (

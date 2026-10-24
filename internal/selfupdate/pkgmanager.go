@@ -4,6 +4,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/jskoll/wyrm/internal/process"
 )
 
 // managedCheck is one package manager's ownership probe: its display name,
@@ -42,7 +44,12 @@ func Managed(path string) (manager, hint string, ok bool) {
 		if _, err := exec.LookPath(c.lookCmd); err != nil {
 			continue
 		}
-		if err := exec.Command(c.lookCmd, c.args(resolved)...).Run(); err == nil {
+		// Bounded like every other helper process: a wedged package database
+		// lock must not hang selfupdate forever.
+		cmd, cancel := process.Command(c.lookCmd, c.args(resolved)...)
+		err := cmd.Run()
+		cancel()
+		if err == nil {
 			return c.name, c.hint, true
 		}
 	}

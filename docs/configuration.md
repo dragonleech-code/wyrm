@@ -193,6 +193,7 @@ agent's UI — that needs a profile:
 | `blocked` | array | Substrings that appear only around a prompt awaiting an answer |
 | `idle` | array | Substrings of the idle input box |
 | `busy_pattern` | string | Regular expression for a live indicator no fixed string catches, e.g. a running timer |
+| `approve` | array | tmux key names `wyrm agent approve` and the TUI's `Y` send to accept a blocked prompt. Default `["Enter"]` |
 
 ```toml
 [[tui.agent.profiles]]
@@ -302,6 +303,11 @@ automatically traverses parent directories to find the repository's `.wyrm.toml`
 Traversal stops at git repository boundaries (`.git`), the user's home
 directory, or the filesystem root.
 
+A config found this way is refused if another user could have written it: a
+file owned by someone else (root excepted), a file writable by every user, or
+one sitting directly in a world-writable directory you don't own, such as
+`/tmp`. `-config` names a file explicitly and skips the check.
+
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `discovery.upward` | bool | `true` | Walk upward from the current working directory to find `.wyrm.toml` |
@@ -309,6 +315,29 @@ directory, or the filesystem root.
 ```toml
 [discovery]
 upward = true
+```
+
+## `[trust]` — running configs from other people
+
+wyrm asks before running a project config from outside your own wyrm
+directories, and remembers the answer per config, until the config changes.
+See [trusting project configs](guide.md#trusting-project-configs).
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `trust.enabled` | bool | `true` | Ask before running an untrusted project config. `WYRM_TRUST_ALL=1` also skips the check, for scripts and CI |
+
+## `[[workspace]]` — groups of projects
+
+| Key | Type | Description |
+|---|---|---|
+| `name` | string | Started with `wyrm @name`, stopped with `wyrm kill @name` |
+| `projects` | array | Project names or aliases, as `wyrm <name>` takes them. The first is attached to after starting |
+
+```toml
+[[workspace]]
+name = "backend"
+projects = ["api", "worker", "db"]
 ```
 
 ## Custom default config
@@ -331,6 +360,7 @@ file uses the same `[session]` / `[[windows]]` format documented below.
 | `on_project_detach` | string | — | Shell command run inside tmux when client detaches |
 | `on_project_first_start` | string | — | Runs alongside `on_project_start`, but only the very first time this project is ever started |
 | `on_project_restart` | string | — | Runs alongside `on_project_start` on every start after the first |
+| `hook_timeout` | string | no limit | Limit for each hook and `post_window`, as a duration (`"90s"`, `"5m"`). A hook that runs over is killed — its whole process group — and reported as a warning |
 | `startup_window` | string | first window | Window (name or index) to focus after creation. Without it the session opens on the first window, focused on its first pane |
 | `startup_pane` | int | — | Pane to focus within `startup_window` (uses your `pane-base-index`) |
 | `env` | table | — | Environment variables set in every pane of the session (below) |
@@ -340,6 +370,39 @@ file uses the same `[session]` / `[[windows]]` format documented below.
 | `pane_title_format` | string | `#{pane_index}: #{pane_current_command}` | tmux format string shown on the pane-border line |
 
 At least one of `name` / `root` is required.
+
+## `extends`
+
+A top-level `extends` names a base config this one builds on, relative to
+this file (`~` and `$VAR` expand). It lets several projects share a layout
+while each keeps its own file:
+
+```toml
+# ~/src/api/.wyrm.toml
+extends = "~/.config/wyrm/base/node.wyrm.toml"
+
+[session]
+name = "api"
+env = { PORT = "4000" }
+
+[[windows]]
+name = "server"          # replaces the base's "server" window
+  [[windows.splits]]
+  run = "npm run dev:api"
+```
+
+- Every `[session]` key the extending file sets replaces the base's; `env`
+  merges key by key, the extending file winning.
+- A window whose `name` matches a base window replaces it in place; any other
+  window is appended after the base's. Windows replace whole — a split tree has
+  no per-pane identity to merge by.
+- A relative `root` in the base (`root = "."` above all) resolves against the
+  extending file's directory, so a base can be a template.
+- Bases can extend further bases (up to 8 deep); a cycle is an error.
+- The merged result is what's validated, so a base can be partial — a
+  `[session]` block with no windows, say.
+- [Trust](guide.md#trusting-project-configs) covers the whole chain: editing a
+  base asks again before any config extending it runs.
 
 ### `on_project_first_start` / `on_project_restart`
 
@@ -389,6 +452,35 @@ reach the shell in every pane. Setting them once on the session with
 Requires tmux 3.2 or newer (for `-e` on `new-session` / `split-window`). Every
 other wyrm feature works on 3.1+.
 
+## Template variables (`-var`)
+
+`wyrm up`, `restart`, `validate`, and `wyrm <name>` take `-var KEY=VALUE`
+(repeatable). Each `{{KEY}}` in the config's names, roots, hooks, commands, and
+env values is replaced with `VALUE`, and `KEY` is also exported into the
+session's environment:
+
+```toml
+[session]
+name = "review-{{pr}}"
+root = "~/src/app"
+on_project_start = "gh pr checkout \"$pr\""   # the env var: quoted by the shell
+```
+
+```sh
+wyrm up -var pr=1234
+```
+
+Substitution is textual: in a hook or command, the value becomes part of the
+shell line. A value you typed is fine; a value that came from somewhere else —
+a branch name, a PR title — could carry `;` or `$(...)`. For those, use the
+environment variable (`"$pr"`, quoted) rather than `{{pr}}`, so the shell sees
+data instead of code.
+
+`{{.name}}`, `{{var.name}}`, `{{.var.name}}`, `${name}`, and bare `$name` also
+substitute, but are deprecated, warned about, and removed in 1.0. The last two
+collide with the shell's own variables — a hook mentioning `$HOME` would be
+rewritten by `-var HOME=...`.
+
 ## Hooks as wyrm's extension point
 
 wyrm has no plugin system, and isn't planning to build one — a real plugin
@@ -435,7 +527,7 @@ their root and environment apply when that physical pane is created.
 | `splits` | list | — | Split tree (below) — the recommended layout format |
 | `panes` | list | — | Legacy flat pane list (below); ignored when `splits` is set |
 | `layout` | string | `tiled` | tmux layout applied after legacy `panes` (`even-horizontal`, `main-vertical`, ...). Ignored when `splits` is set — a named layout would discard the tree's sizes — and wyrm warns if you set both |
-| `synchronize` | bool | `false` | Turn on tmux's `synchronize-panes` for this window, so typing goes to every pane at once. `synchronize_panes` is an accepted alias |
+| `synchronize` | bool | `false` | Turn on tmux's `synchronize-panes` for this window, so typing goes to every pane at once. `synchronize_panes` is a deprecated alias, removed in 1.0 |
 | `remain_on_exit` | bool | `false` | Keep the window's panes open after their command exits, instead of closing them — so you can read what a failed command printed |
 
 `post_window` is a real subprocess — the same shape as `on_project_start`/
@@ -467,7 +559,9 @@ A failure warns and continues, same as every other per-window failure — see
 | `root` | string | window root | This pane's working directory, relative to the window's root unless absolute |
 | `env` | table | — | Environment variables for this pane and its children, overriding window and session env |
 | `children` | list | — | Nested splits, applied inside this entry's pane |
-| `zoomed` | bool | `false` | Start with this pane focused and zoomed. `zoom` is an accepted alias. Only one pane per window can be zoomed — the last one that asks wins |
+| `zoomed` | bool | `false` | Start with this pane focused and zoomed. Only one pane per window can be zoomed — the last one that asks wins. `zoom` is a deprecated alias, removed in 1.0 |
+| `wait_for` | string | — | Delay `command` or `run` until a dependency is ready: `tcp:HOST:PORT`, `file:PATH`, or an `http(s)://` URL (below) |
+| `wait_timeout` | string | `2m` | Give up on `wait_for` after this long; the command then doesn't run |
 | `remain_on_exit` | bool | `false` | Keep this pane open after its command exits (the per-pane form of the window option) |
 
 ### `command` vs `run`
@@ -488,6 +582,20 @@ which is what you want for `nvim` or a REPL.
   [[windows.splits]]
   type = "h"
   run = "npm run dev"       # the pane *is* the dev server
+```
+
+### `wait_for`
+
+The pane opens immediately; its command waits. wyrm types (or, for `run`,
+starts) `wyrm wait -timeout T 'SPEC' && <command>`, so the command only runs
+once the dependency answers — a TCP connect succeeds, the file exists, or the
+URL returns a status below 400 — and never if the wait times out. A spec can't
+contain a quote or newline.
+
+```toml
+  [[windows.splits]]
+  command = "psql"
+  wait_for = "tcp:localhost:5432"
 ```
 
 Working directories cascade: a pane uses its own `root`, else its window's,

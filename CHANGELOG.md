@@ -6,6 +6,87 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Security
+
+- **Trust prompt for project configs.** Before running a config from outside
+  your own wyrm directories (the wyrm config dir, `shared_dir`, `[[wildcard]]`
+  templates), wyrm lists every hook and pane command it would run and asks.
+  A yes is stored in `trust.toml`, bound to a hash of the config and every base
+  it `extends`, so any edit asks again. Configs that run no commands need no
+  decision. `wyrm allow` / `wyrm deny` manage decisions; `WYRM_TRUST_ALL=1` or
+  `[trust] enabled = false` turn the prompt off for automation. `wyrm kill` on
+  an untrusted config still stops the session, without its hooks. The TUI asks
+  the same way. `wyrm clone`'s confirmation is now this prompt.
+- **Config discovery refuses files another user could have written:** a config
+  owned by another user, writable by every user, or sitting in a world-writable
+  directory like `/tmp`. Upward discovery outside `$HOME` and git repositories
+  previously reached as far as `/`, so a `.wyrm.toml` planted in `/tmp` ran for
+  anyone typing `wyrm` beneath it. `-config` still accepts any file.
+- macOS desktop notifications pass their text to `osascript` as arguments
+  instead of quoting it into AppleScript; terminal notifications also strip C1
+  control characters; `notify-send` arguments can no longer be read as options.
+- Package-manager detection in `selfupdate` is bounded by the same timeout as
+  every other helper process.
+- Releases build with Go 1.26.10 (the `toolchain` directive), which fixes
+  GO-2026-6809 in `crypto/x509` and GO-2026-6617 in `net/http`; Go 1.25 has no
+  fixed release. Building from source still needs only Go 1.25.
+- The release workflow passes the signing password through the environment
+  rather than interpolating it into the script, and the AUR job runs with
+  read-only repository permissions.
+
+### Added
+
+- `extends`: build a config on a shared base. Session keys override, `env`
+  merges, and a window with the same name replaces the base's.
+- `wait_for` / `wait_timeout` on a split: start the pane's command only once a
+  TCP port, file, or HTTP endpoint is ready. `wyrm wait` runs the same check.
+- `session.hook_timeout`: bound every lifecycle hook and `post_window`; a hook
+  that runs over is killed with its process group and reported as a warning.
+- `wyrm diff` shows how a running session differs from its config (exits 1 on
+  drift; `-format json`), and `wyrm up -reconcile` adds the missing windows
+  without touching the rest.
+- Workspaces: `[[workspace]]` in the settings file, started with
+  `wyrm @name` and stopped with `wyrm kill @name`.
+- `wyrm worktree BRANCH` creates a git worktree under `<repo>.worktrees/` and
+  starts a session in it.
+- `wyrm up -host H` / `wyrm kill -host H` build and tear down a session on
+  another machine over ssh, with hooks run remotely and one multiplexed
+  connection per host.
+- `wyrm agent next` switches to the next blocked (or idle) agent, and
+  `wyrm agent approve` accepts a blocked agent's prompt. In the TUI, `b` jumps
+  to the next blocked agent and `Y` approves the selected pane. Agent profiles
+  take an `approve` key list.
+- `wyrm status -format jsonl` for streaming one object per line with `-watch`.
+- `wyrm schema` and `schema/wyrm.schema.json`: a JSON Schema for `.wyrm.toml`,
+  generated from the parser's own types, for editor completion via taplo's
+  `#:schema` directive.
+- `wyrm validate -explain` lists every discovery layer and which one won.
+- A [Guide](docs/guide.md) and [comparison](docs/comparison.md) page on the
+  docs site.
+
+### Changed
+
+- `docs/` is now the single source of documentation; the README is a front
+  page linking into the docs site.
+- The TUI's update loop and key handling are split into per-message handlers
+  and a table of panel-scoped keys; `wyrm init`'s wizard is table-driven.
+
+### Deprecated
+
+- `synchronize_panes` and `zoom` (use `synchronize` and `zoomed`), and every
+  `-var` placeholder form other than `{{name}}` — `{{.name}}`, `{{var.name}}`,
+  `{{.var.name}}`, `${name}`, and bare `$name` — now warn, and are removed in
+  1.0. The last two collide with shell variables in hooks.
+
+### Fixed
+
+- `wyrm save` (and anything else reading a window layout) works with tmux 3.8,
+  which reports `#{window_layout}` as JSON.
+- The man page named the settings file `settings.toml` and the shared config
+  directory as `wyrm/`; they are `config.toml` and `wyrm/settings/`.
+- The man page now documents `wyrm send` and `wyrm setup-tmux`, `-host`, and
+  `TMUX_CONF`; a test fails if a subcommand is added without a man page entry.
+
 ## [1.3.0] - 2026-10-02
 
 ### Added

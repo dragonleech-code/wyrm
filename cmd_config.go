@@ -11,6 +11,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/jskoll/wyrm/internal/config"
@@ -49,6 +51,9 @@ func (a *app) listConfigs(args []string) error {
 					_, _ = fmt.Fprintln(a.stdout, name)
 				}
 			}
+		}
+		for _, w := range settings.Workspaces {
+			_, _ = fmt.Fprintln(a.stdout, "@"+w.Name)
 		}
 		return nil
 	}
@@ -193,6 +198,7 @@ func (a *app) validate(args []string) error {
 	fs := a.newFlagSet("validate")
 	configPath := fs.String("config", "", "path to config file (default: .wyrm.toml, then .tmuxconfig)")
 	strict := fs.Bool("strict", false, "exit non-zero if the config has warnings (typos, deprecations)")
+	explain := fs.Bool("explain", false, "show every place wyrm looked for a config, and which one it chose")
 	var vars varMapFlag
 	fs.Var(&vars, "var", "set template variable (KEY=VALUE, can be repeated)")
 	if err := parseFlags(fs, args); err != nil {
@@ -205,12 +211,21 @@ func (a *app) validate(args []string) error {
 	if err != nil {
 		return err
 	}
+	if *explain {
+		for _, step := range config.Explain(settings, *configPath) {
+			mark := "  "
+			if step.Chosen {
+				mark = "->"
+			}
+			_, _ = fmt.Fprintf(a.stdout, "%s %-46s %s\n", mark, step.Layer, step.Detail)
+		}
+	}
 	cfg, source, err := config.ResolveEffective(settings, *configPath)
 	if err != nil {
 		return err
 	}
 	if len(vars) > 0 {
-		cfg.Interpolate(vars)
+		a.interpolate(cfg, vars)
 	}
 	a.printWarnings(cfg)
 	// Decoding only checks structure, not what session.root, a window's
@@ -254,9 +269,8 @@ func (a *app) edit(args []string) error {
 		}
 		path = resolved
 	}
-	// Create the parent directory whichever way the path was arrived at:
-	// `wyrm edit -config new/dir/x.toml` used to hand the editor a path it
-	// couldn't write, while the flagless form worked.
+	// Create the parent directory whichever way the path was arrived at, so
+	// `wyrm edit -config new/dir/x.toml` hands the editor a writable path.
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
@@ -582,173 +596,118 @@ func (a *app) initDestination(settings *config.Settings, explicit string) (strin
 	return dest, exists, nil
 }
 
+// initTemplates are the wizard's ready-made choices, in menu order after
+// "1) Custom layout". keys are the answers that select each one.
+var initTemplates = []struct {
+	name, label string
+	keys        []string
+}{
+	{"node", "Node.js (dev server + test watch)", []string{"node", "nodejs"}},
+	{"python", "Python (editor + pytest + repl)", []string{"python", "py"}},
+	{"go", "Go (editor + test watch + server)", []string{"go", "golang"}},
+	{"rust", "Rust (editor + test + check + run)", []string{"rust", "rs"}},
+	{"monorepo", "Monorepo (services + packages + git)", nil},
+	{"minimal", "Minimal (editor + shell)", nil},
+}
+
+// initPresets are the custom wizard's per-window layouts, in menu order, with
+// the prompt for each pane's command. The first pane defaults to the editor;
+// the rest to a plain shell.
+var initPresets = []struct {
+	preset int
+	label  string
+	panes  []string
+}{
+	{config.PresetSingle, "Single pane", []string{"Command (leave empty for shell)"}},
+	{config.PresetTwoPaneVertical, "2-pane vertical split (left / right)", []string{"Left pane command", "Right pane command (leave empty for shell)"}},
+	{config.PresetTwoPaneHorizontal, "2-pane horizontal split (top / bottom)", []string{"Top pane command", "Bottom pane command (leave empty for shell)"}},
+	{config.PresetThreePaneEditorStack, "3-pane (editor left, 2 stacked right)", []string{"Main/editor pane command", "Top-right pane command (leave empty for shell)", "Bottom-right pane command (leave empty for shell)"}},
+	{config.PresetThreePaneMainHorizontal, "3-pane main horizontal (top / 2 bottom)", []string{"Top/main pane command", "Bottom-left pane command (leave empty for shell)", "Bottom-right pane command (leave empty for shell)"}},
+}
+
 func (a *app) runInitWizard(reader *bufio.Reader, defaultSessionName, defaultRoot string) (string, error) {
 	sessionName, err := promptLine(reader, a.stdout, "Session name", defaultSessionName)
 	if err != nil {
 		return "", err
 	}
-	if sessionName == "" {
-		sessionName = defaultSessionName
-	}
-
 	sessionRoot, err := promptLine(reader, a.stdout, "Root directory", defaultRoot)
 	if err != nil {
 		return "", err
 	}
-	if sessionRoot == "" {
-		sessionRoot = defaultRoot
-	}
 
 	_, _ = fmt.Fprintln(a.stdout, "\nChoose configuration method:")
 	_, _ = fmt.Fprintln(a.stdout, "  1) Custom layout (interactive wizard)")
-	_, _ = fmt.Fprintln(a.stdout, "  2) Node.js (dev server + test watch)")
-	_, _ = fmt.Fprintln(a.stdout, "  3) Python (editor + pytest + repl)")
-	_, _ = fmt.Fprintln(a.stdout, "  4) Go (editor + test watch + server)")
-	_, _ = fmt.Fprintln(a.stdout, "  5) Rust (editor + test + check + run)")
-	_, _ = fmt.Fprintln(a.stdout, "  6) Monorepo (services + packages + git)")
-	_, _ = fmt.Fprintln(a.stdout, "  7) Minimal (editor + shell)")
-
-	choice, err := promptLine(reader, a.stdout, "Select [1-7]", "1")
+	for i, t := range initTemplates {
+		_, _ = fmt.Fprintf(a.stdout, "  %d) %s\n", i+2, t.label)
+	}
+	choice, err := promptLine(reader, a.stdout, fmt.Sprintf("Select [1-%d]", len(initTemplates)+1), "1")
 	if err != nil {
 		return "", err
 	}
-
-	switch strings.TrimSpace(choice) {
-	case "2", "node", "nodejs":
-		return config.GetTemplate("node", sessionName, sessionRoot)
-	case "3", "python", "py":
-		return config.GetTemplate("python", sessionName, sessionRoot)
-	case "4", "go", "golang":
-		return config.GetTemplate("go", sessionName, sessionRoot)
-	case "5", "rust", "rs":
-		return config.GetTemplate("rust", sessionName, sessionRoot)
-	case "6", "monorepo":
-		return config.GetTemplate("monorepo", sessionName, sessionRoot)
-	case "7", "minimal":
-		return config.GetTemplate("minimal", sessionName, sessionRoot)
-	default:
-		// Custom layout wizard
+	choice = strings.TrimSpace(choice)
+	for i, t := range initTemplates {
+		if choice == strconv.Itoa(i+2) || choice == t.name || slices.Contains(t.keys, choice) {
+			return config.GetTemplate(t.name, sessionName, sessionRoot)
+		}
 	}
 
 	var windows []config.WindowSpec
-	winIdx := 1
-	for {
-		defaultWinName := "main"
-		if winIdx > 1 {
-			defaultWinName = fmt.Sprintf("window%d", winIdx)
-		}
-
-		_, _ = fmt.Fprintf(a.stdout, "\n--- Window %d ---\n", winIdx)
-		winName, err := promptLine(reader, a.stdout, "Window name", defaultWinName)
+	for winIdx := 1; ; winIdx++ {
+		w, err := a.promptWindow(reader, winIdx)
 		if err != nil {
 			return "", err
 		}
-		if winName == "" {
-			winName = defaultWinName
-		}
-
-		_, _ = fmt.Fprintln(a.stdout, "Layout presets:")
-		_, _ = fmt.Fprintln(a.stdout, "  1) Single pane")
-		_, _ = fmt.Fprintln(a.stdout, "  2) 2-pane vertical split (left / right)")
-		_, _ = fmt.Fprintln(a.stdout, "  3) 2-pane horizontal split (top / bottom)")
-		_, _ = fmt.Fprintln(a.stdout, "  4) 3-pane (editor left, 2 stacked right)")
-		_, _ = fmt.Fprintln(a.stdout, "  5) 3-pane main horizontal (top / 2 bottom)")
-
-		layoutChoice, err := promptLine(reader, a.stdout, "Select layout [1-5]", "2")
-		if err != nil {
-			return "", err
-		}
-
-		preset := config.PresetTwoPaneVertical
-		switch strings.TrimSpace(layoutChoice) {
-		case "1":
-			preset = config.PresetSingle
-		case "2":
-			preset = config.PresetTwoPaneVertical
-		case "3":
-			preset = config.PresetTwoPaneHorizontal
-		case "4":
-			preset = config.PresetThreePaneEditorStack
-		case "5":
-			preset = config.PresetThreePaneMainHorizontal
-		}
-
-		var commands []string
-		switch preset {
-		case config.PresetSingle:
-			cmd1, err := promptLine(reader, a.stdout, "Command (leave empty for shell)", "$EDITOR .")
-			if err != nil {
-				return "", err
-			}
-			commands = append(commands, cmd1)
-		case config.PresetTwoPaneVertical:
-			cmd1, err := promptLine(reader, a.stdout, "Left pane command", "$EDITOR .")
-			if err != nil {
-				return "", err
-			}
-			cmd2, err := promptLine(reader, a.stdout, "Right pane command (leave empty for shell)", "")
-			if err != nil {
-				return "", err
-			}
-			commands = append(commands, cmd1, cmd2)
-		case config.PresetTwoPaneHorizontal:
-			cmd1, err := promptLine(reader, a.stdout, "Top pane command", "$EDITOR .")
-			if err != nil {
-				return "", err
-			}
-			cmd2, err := promptLine(reader, a.stdout, "Bottom pane command (leave empty for shell)", "")
-			if err != nil {
-				return "", err
-			}
-			commands = append(commands, cmd1, cmd2)
-		case config.PresetThreePaneEditorStack:
-			cmd1, err := promptLine(reader, a.stdout, "Main/editor pane command", "$EDITOR .")
-			if err != nil {
-				return "", err
-			}
-			cmd2, err := promptLine(reader, a.stdout, "Top-right pane command (leave empty for shell)", "")
-			if err != nil {
-				return "", err
-			}
-			cmd3, err := promptLine(reader, a.stdout, "Bottom-right pane command (leave empty for shell)", "")
-			if err != nil {
-				return "", err
-			}
-			commands = append(commands, cmd1, cmd2, cmd3)
-		case config.PresetThreePaneMainHorizontal:
-			cmd1, err := promptLine(reader, a.stdout, "Top/main pane command", "$EDITOR .")
-			if err != nil {
-				return "", err
-			}
-			cmd2, err := promptLine(reader, a.stdout, "Bottom-left pane command (leave empty for shell)", "")
-			if err != nil {
-				return "", err
-			}
-			cmd3, err := promptLine(reader, a.stdout, "Bottom-right pane command (leave empty for shell)", "")
-			if err != nil {
-				return "", err
-			}
-			commands = append(commands, cmd1, cmd2, cmd3)
-		}
-
-		windows = append(windows, config.WindowSpec{
-			Name:     winName,
-			Preset:   preset,
-			Commands: commands,
-		})
-
+		windows = append(windows, w)
 		more, err := promptLine(reader, a.stdout, "Add another window? [y/N]", "N")
 		if err != nil {
 			return "", err
 		}
-		ans := strings.TrimSpace(strings.ToLower(more))
-		if ans != "y" && ans != "yes" {
+		if ans := strings.TrimSpace(strings.ToLower(more)); ans != "y" && ans != "yes" {
 			break
 		}
-		winIdx++
+	}
+	return config.GenerateCustomConfig(sessionName, sessionRoot, windows), nil
+}
+
+// promptWindow asks for one custom window: its name, layout, and a command
+// per pane.
+func (a *app) promptWindow(reader *bufio.Reader, winIdx int) (config.WindowSpec, error) {
+	defaultName := "main"
+	if winIdx > 1 {
+		defaultName = fmt.Sprintf("window%d", winIdx)
+	}
+	_, _ = fmt.Fprintf(a.stdout, "\n--- Window %d ---\n", winIdx)
+	name, err := promptLine(reader, a.stdout, "Window name", defaultName)
+	if err != nil {
+		return config.WindowSpec{}, err
 	}
 
-	return config.GenerateCustomConfig(sessionName, sessionRoot, windows), nil
+	_, _ = fmt.Fprintln(a.stdout, "Layout presets:")
+	for i, p := range initPresets {
+		_, _ = fmt.Fprintf(a.stdout, "  %d) %s\n", i+1, p.label)
+	}
+	layoutChoice, err := promptLine(reader, a.stdout, fmt.Sprintf("Select layout [1-%d]", len(initPresets)), "2")
+	if err != nil {
+		return config.WindowSpec{}, err
+	}
+	preset := initPresets[1] // two-pane vertical, the default
+	if n, err := strconv.Atoi(strings.TrimSpace(layoutChoice)); err == nil && n >= 1 && n <= len(initPresets) {
+		preset = initPresets[n-1]
+	}
+
+	commands := make([]string, 0, len(preset.panes))
+	for i, prompt := range preset.panes {
+		def := ""
+		if i == 0 {
+			def = "$EDITOR ."
+		}
+		cmd, err := promptLine(reader, a.stdout, prompt, def)
+		if err != nil {
+			return config.WindowSpec{}, err
+		}
+		commands = append(commands, cmd)
+	}
+	return config.WindowSpec{Name: name, Preset: preset.preset, Commands: commands}, nil
 }
 
 func promptLine(reader *bufio.Reader, w io.Writer, prompt string, defaultVal string) (string, error) {
@@ -766,4 +725,23 @@ func promptLine(reader *bufio.Reader, w io.Writer, prompt string, defaultVal str
 		return defaultVal, nil
 	}
 	return line, nil
+}
+
+// schema prints the JSON Schema for .wyrm.toml. Editors that read a
+// "#:schema" directive (taplo, Even Better TOML) use it for completion and
+// validation; the same document is published at config.SchemaURL.
+func (a *app) schema(args []string) error {
+	fs := a.newFlagSet("schema")
+	if err := parseFlags(fs, args); err != nil {
+		return err
+	}
+	if err := requireNoArgs(fs); err != nil {
+		return err
+	}
+	data, err := config.JSONSchema()
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(a.stdout, "%s\n", data)
+	return err
 }

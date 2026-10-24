@@ -186,3 +186,23 @@ func sortedKeys(m map[string]bool) []string {
 	sort.Strings(keys)
 	return keys
 }
+
+// TestSubcommandsDocumentedInManPage checks that man/wyrm.1 has an entry for
+// every verb run() dispatches on. Packages install it as the offline
+// reference, so a verb missing there is missing for anyone without the docs
+// site.
+func TestSubcommandsDocumentedInManPage(t *testing.T) {
+	data, err := os.ReadFile("man/wyrm.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// An entry is a .B/.BI line naming the verb; troff escapes the hyphen in
+	// "setup\-tmux", so undo that before matching.
+	text := strings.ReplaceAll(string(data), `\-`, "-")
+	for v := range dispatchVerbs(t) {
+		re := regexp.MustCompile(`(?m)^\.BI? "?wyrm ` + regexp.QuoteMeta(v) + `\b`)
+		if !re.MatchString(text) {
+			t.Errorf("man/wyrm.1 has no entry for subcommand %q", v)
+		}
+	}
+}

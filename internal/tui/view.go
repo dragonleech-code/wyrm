@@ -418,10 +418,8 @@ func (m Model) renderHelp() string {
 		line := m.promptTitle + " " + m.textInput.View()
 		return modalStyle.Render(truncate(line, m.width))
 	}
-	// A failed action takes the footer until the next keypress. Errors used to
-	// render only when the preview happened to be empty — which in normal use
-	// it never is — so a failed kill, rename, or new-window looked exactly like
-	// a successful one.
+	// A failed action takes the footer until the next keypress, so a failed
+	// kill, rename, or new-window can't look like a successful one.
 	if m.err != nil {
 		return errorStyle.Render(truncate("error: "+m.err.Error()+"  (any key dismisses)", m.width))
 	}
@@ -485,6 +483,8 @@ var helpSections = []helpSection{
 	{"Agent markers", [][2]string{
 		{blockedGlyph, "an agent is waiting on an answer"},
 		{idleGlyph, "an agent finished and is awaiting input"},
+		{"b", "jump to the next blocked agent"},
+		{"Y", "approve the selected pane's prompt (Panes)"},
 	}},
 	{"Projects panel", [][2]string{
 		{"Enter", "start or attach the config's session"},
@@ -518,6 +518,7 @@ var helpSections = []helpSection{
 		{"s / v", "split pane vertically"},
 		{"S", "split pane horizontally"},
 		{"z", "toggle zoom"},
+		{"Y", "approve a blocked agent's prompt"},
 		{"p / [", "open scrollback pager & search"},
 		{"y", "copy pane preview or pager buffer"},
 	}},
@@ -776,11 +777,9 @@ func padRight(s string, w int) string {
 
 // pagerBodyHeight is how many buffer lines the pager box actually renders,
 // mirroring renderPagerOverlay's own boxH/innerH/bodyH chain exactly.
-// Scrolling, paging, "G"/"end", and search-match navigation all have to
-// agree with this number — they used to independently assume m.height-4,
-// one row taller than the box the renderer really drew, so the last line
-// was unreachable and jumping to a search match could scroll past what was
-// actually shown.
+// Scrolling, paging, "G"/"end", and search-match navigation all use this
+// number; any one of them assuming its own height makes the last line
+// unreachable or lets a search jump scroll past what is actually shown.
 func (m Model) pagerBodyHeight() int {
 	boxH := m.height - 2
 	if boxH < 6 {

@@ -35,13 +35,11 @@ const (
 	StateIdle
 	// StateUnknown is an agent pane whose screen matched nothing we recognise.
 	//
-	// It exists so that not-recognised and finished-its-turn stay separate.
-	// Detect used to return StateIdle by elimination, which made every failure
-	// mode — an agent whose UI changed, or one added to tui.agent.commands that
-	// this package has no patterns for at all — render as a confident "done,
-	// come look" marker. Wrong in the most expensive direction. Unknown carries
-	// no marker, so a detector that has stopped working goes quiet rather than
-	// lying.
+	// It keeps not-recognised and finished-its-turn separate. Treating an
+	// unrecognised screen as idle would make every failure mode — an agent
+	// whose UI changed, or one this package has no patterns for — render as a
+	// confident "done, come look" marker. Unknown carries no marker, so a
+	// detector that has stopped working goes quiet rather than lying.
 	StateUnknown
 )
 
@@ -91,11 +89,9 @@ func Merge(a, b State) State {
 
 // Profile is the set of on-screen markers that identify one agent's states.
 //
-// It exists so that supporting another agent is a matter of describing its
-// chrome rather than editing this package. `tui.agent.commands` used to widen
-// only *which* panes were captured, while the patterns stayed Claude Code's —
-// so adding "aider" got you panes that were captured, matched nothing, and (at
-// the time) were reported idle forever.
+// It makes supporting another agent a matter of describing its chrome rather
+// than editing this package. `tui.agent.commands` alone only widens *which*
+// panes are captured; the patterns stay Claude Code's.
 type Profile struct {
 	// Commands are the #{pane_current_command} values this profile claims.
 	Commands []string `toml:"commands"`
@@ -110,8 +106,28 @@ type Profile struct {
 	// BusyPattern is an optional regular expression for a live indicator that no
 	// fixed string can capture, such as a running elapsed counter.
 	BusyPattern string `toml:"busy_pattern"`
+	// Approve are the tmux key names that accept the agent's blocked prompt,
+	// sent by `wyrm agent approve` and the TUI's approve key. Empty means
+	// DefaultApproveKeys.
+	Approve []string `toml:"approve"`
 
 	busyRe *regexp.Regexp
+}
+
+// DefaultApproveKeys accepts the highlighted choice of a selection prompt —
+// "Yes" in Claude Code's permission prompt.
+var DefaultApproveKeys = []string{"Enter"}
+
+// ApproveKeys returns the keys that approve a blocked pane running command.
+func ApproveKeys(command string, profiles []Profile) []string {
+	for _, p := range profiles {
+		for _, c := range p.Commands {
+			if c == command && len(p.Approve) > 0 {
+				return p.Approve
+			}
+		}
+	}
+	return DefaultApproveKeys
 }
 
 // DefaultCommands are the #{pane_current_command} values treated as an agent

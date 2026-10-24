@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/jskoll/wyrm/internal/process"
 )
@@ -81,16 +82,19 @@ func BuildCustomNotifyCommand(command string, n Notification, title, msg string)
 	return cmd
 }
 
-// SanitizeTerminalString strips ASCII control characters (bytes < 0x20) and DEL (0x7f)
-// to prevent terminal escape sequence injection and control character abuse.
+// SanitizeTerminalString strips C0 control characters, DEL, and the C1
+// controls (U+0080–U+009F) to prevent terminal escape sequence injection. C1
+// matters because some terminals treat U+009B as CSI and U+009D as OSC, the
+// same as ESC [ and ESC ]. Invalid UTF-8 is dropped rather than passed
+// through, since a terminal may decode it differently than Go does.
 func SanitizeTerminalString(s string) string {
 	var buf strings.Builder
 	buf.Grow(len(s))
-	for i := 0; i < len(s); i++ {
-		b := s[i]
-		if b >= 0x20 && b != 0x7f {
-			buf.WriteByte(b)
+	for _, r := range s {
+		if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) || r == utf8.RuneError {
+			continue
 		}
+		buf.WriteRune(r)
 	}
 	return buf.String()
 }
@@ -172,15 +176,37 @@ func BuildWindowsToastCommand(title, msg string) *exec.Cmd {
 	return cmd
 }
 
+// macNotifyScript reads the message and title from osascript's own argument
+// list. Building them into the script with Go's %q quoting was not AppleScript
+// quoting: Go escapes such as \u001b mean nothing to AppleScript, so a crafted
+// window name could break the notification. As arguments they are data.
+const macNotifyScript = `on run argv
+display notification (item 1 of argv) with title (item 2 of argv)
+end run`
+
+// BuildMacNotifyCommand constructs the osascript invocation for a macOS
+// notification, passing title and message as arguments rather than code.
+//
+// osascript stops reading options at its first non-option argument, which is
+// the message — so only a message that itself starts with "-" could be taken
+// for an option. A leading space defuses that without depending on how
+// osascript treats "--".
+func BuildMacNotifyCommand(title, msg string) *exec.Cmd {
+	if strings.HasPrefix(msg, "-") {
+		msg = " " + msg
+	}
+	return exec.Command("osascript", "-e", macNotifyScript, msg, title)
+}
+
 // SendDesktopNotification invokes platform desktop notification tools.
 // Swappable for testing.
 var SendDesktopNotification = func(title, msg string) {
 	switch runtime.GOOS {
 	case "darwin":
-		script := fmt.Sprintf(`display notification %q with title %q`, msg, title)
-		_ = runNotification(exec.Command("osascript", "-e", script))
+		_ = runNotification(BuildMacNotifyCommand(title, msg))
 	case "linux", "freebsd", "openbsd", "netbsd":
-		_ = runNotification(exec.Command("notify-send", title, msg))
+		// "--" so a title starting with "-" is never read as an option.
+		_ = runNotification(exec.Command("notify-send", "--", title, msg))
 	case "windows":
 		cmd := BuildWindowsToastCommand(title, msg)
 		_ = runNotification(cmd)

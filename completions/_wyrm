@@ -35,6 +35,13 @@ _wyrm() {
         'selfupdate:download and install the latest release'
         'setup-tmux:generate or append recommended tmux popup configuration'
         'doctor:check tmux, settings, configs, and optional tools'
+        'allow:trust a project config so wyrm runs its commands'
+        'deny:refuse a project config'
+        'diff:show how the running session differs from its config'
+        'wait:wait for a port, file, or URL to be ready'
+        'agent:jump to or approve a waiting agent'
+        'worktree:create a git worktree and start a session in it'
+        'schema:print the JSON Schema for .wyrm.toml'
         'version:print version and exit'
         'help:show help'
     )
@@ -56,6 +63,8 @@ _wyrm() {
                     _arguments '-config[config file path]:config file:->configs' \
                         '-n[dry run]' \
                         '-d[build the session without attaching]' \
+                        '-reconcile[add missing windows to the running session]' \
+                        '-host[ssh host to run the session on]:host:_hosts' \
                         '-var[set template variable (KEY=VALUE, can be repeated)]:variable:'
                     ;;
                 edit)
@@ -64,6 +73,7 @@ _wyrm() {
                 validate)
                     _arguments '-config[config file path]:config file:->configs' \
                         '-strict[exit non-zero if the config has warnings]' \
+                        '-explain[show where wyrm looked for a config]' \
                         '-var[set template variable (KEY=VALUE, can be repeated)]:variable:'
                     ;;
                 send)
@@ -99,7 +109,32 @@ _wyrm() {
                         '-a[kill all active tmux sessions]' \
                         '-yes[skip confirmation prompt]' \
                         '-y[skip confirmation prompt]' \
+                        '-host[ssh host the session runs on]:host:_hosts' \
                         '-n[dry run]'
+                    ;;
+                allow)
+                    _arguments '-list[list trusted and denied configs]' \
+                        '-revoke[forget the decision about the config]' \
+                        '1:config file:_files'
+                    ;;
+                deny)
+                    _arguments '1:config file:_files'
+                    ;;
+                diff)
+                    _arguments '-config[config file path]:config file:->configs' \
+                        '-format[output format]:format:(text json)'
+                    ;;
+                wait)
+                    _arguments '-timeout[give up after this long]:duration:'
+                    ;;
+                agent)
+                    _arguments '1:action:(next approve)' \
+                        '-state[which agents to visit]:state:(blocked idle any)'
+                    ;;
+                worktree)
+                    _arguments '-base[start a new branch from this ref]:ref:' \
+                        '-path[where to put the worktree]:directory:_files -/' \
+                        '-d[start the session without attaching]'
                     ;;
                 doctor)
                     _arguments '-strict[exit non-zero for warnings as well as errors]'
@@ -125,7 +160,7 @@ _wyrm() {
                         '-f[overwrite existing config without prompting]'
                     ;;
                 status)
-                    _arguments '-format[output format]:format:(text json tmux waybar sketchybar)' \
+                    _arguments '-format[output format]:format:(text json jsonl tmux waybar sketchybar)' \
                         '-session[filter to session]:session:' \
                         '-v[verbose output]' \
                         '-watch[continuously stream status output]' \

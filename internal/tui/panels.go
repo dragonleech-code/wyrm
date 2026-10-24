@@ -6,15 +6,14 @@ import tea "github.com/charmbracelet/bubbletea"
 //
 // Every panel-shaped question — how many rows does it have, what does it draw,
 // what does its footer say, what does its context menu offer, what does "x" do
-// on it — used to be its own four-case switch, and there were nine of them
-// spread across four files. Adding a panel meant finding all nine; forgetting
-// one produced a panel that looked right and behaved wrong in a corner.
+// on it — is answered by this table, so adding a panel means adding one entry
+// rather than finding every switch that would otherwise need a case.
 //
-// The switches are now this table. What stays outside it is anything that
-// genuinely differs in *type* rather than in behaviour: the four list slices on
-// Model, and the four visible* accessors that filter them, because they hold
-// Projects, Sessions, WindowInfos and PaneInfos respectively and no useful
-// common interface exists over them.
+// What stays outside it is anything that genuinely differs in *type* rather
+// than in behaviour: the four list slices on Model, and the four visible*
+// accessors that filter them, because they hold Projects, Sessions,
+// WindowInfos and PaneInfos respectively and no useful common interface exists
+// over them.
 
 // panelSpec describes one panel.
 type panelSpec struct {
@@ -60,7 +59,7 @@ type panelSpec struct {
 }
 
 // navKeys is the part of the footer that never changes.
-const navKeys = "tab/1-4: focus  jk: move  /: filter  ^f/^z: search panel/all  R: reload  ?: help  q: quit"
+const navKeys = "tab/1-4: focus  jk: move  /: filter  ^f/^z: search panel/all  b: next blocked  R: reload  ?: help  q: quit"
 
 // panelSpecs is indexed by panel.
 var panelSpecs = [numPanels]panelSpec{
@@ -100,7 +99,7 @@ var panelSpecs = [numPanels]panelSpec{
 		title:  "Panes",
 		length: func(m Model) int { return len(m.visiblePanes()) },
 		rows:   paneRows,
-		keys:   "↵: attach  x: kill  s/S: split  z: zoom  " + navKeys,
+		keys:   "↵: attach  x: kill  s/S: split  z: zoom  Y: approve  " + navKeys,
 		menu:   paneMenu,
 		kill:   killPane,
 		child:  noPanel,

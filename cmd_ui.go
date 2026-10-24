@@ -82,9 +82,8 @@ func formatSessionRow(s sessions.Session) string {
 // choice (nothing running, or the user aborted) exits quietly.
 //
 // It runs the same program `wyrm tui` does, in its compact two-panel form with
-// the filter already open — see tui.RunPicker. It used to be an entirely
-// separate hand-rolled terminal UI offering a subset of the same features under
-// different keys.
+// the filter already open — see tui.RunPicker — so the two share every key and
+// action.
 func (a *app) pick(args []string) error {
 	fs := a.newFlagSet("pick")
 	if err := parseFlags(fs, args); err != nil {

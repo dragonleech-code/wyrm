@@ -16,7 +16,11 @@ import (
 	"github.com/jskoll/wyrm/internal/tmux"
 )
 
-func reviewServer(t *testing.T) tmux.Exec {
+// The CLI's end-to-end tests: each one drives a real tmux server on an isolated
+// socket, killed when the test ends, so none of them touch the user's own
+// sessions. Unit tests against a recording Runner live beside each verb.
+
+func integrationServer(t *testing.T) tmux.Exec {
 	t.Helper()
 	if testing.Short() {
 		t.Skip("requires tmux")
@@ -24,7 +28,7 @@ func reviewServer(t *testing.T) tmux.Exec {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux unavailable")
 	}
-	r := tmux.Exec{SocketName: fmt.Sprintf("wyrm-review-%d-%s", os.Getpid(), strings.ReplaceAll(t.Name(), "/", "-"))}
+	r := tmux.Exec{SocketName: fmt.Sprintf("wyrm-integration-%d-%s", os.Getpid(), strings.ReplaceAll(t.Name(), "/", "-"))}
 	cmd := exec.Command("tmux", "-L", r.SocketName, "-f", "/dev/null", "new-session", "-d", "-s", "keeper", "-x", "160", "-y", "60", "/bin/sh")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("isolated server: %v %s", err, out)
@@ -36,7 +40,7 @@ func reviewServer(t *testing.T) tmux.Exec {
 	return r
 }
 
-func reviewCreate(t *testing.T, r tmux.Exec, cfg *config.Config) string {
+func integrationCreate(t *testing.T, r tmux.Exec, cfg *config.Config) string {
 	t.Helper()
 	var warnings bytes.Buffer
 	_, id, _, err := session.Create(r, cfg, io.Discard, &warnings)
@@ -49,7 +53,7 @@ func reviewCreate(t *testing.T, r tmux.Exec, cfg *config.Config) string {
 	return id
 }
 
-func reviewWrite(t *testing.T, path, data string) {
+func integrationWrite(t *testing.T, path, data string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		t.Fatal(err)
@@ -59,10 +63,10 @@ func reviewWrite(t *testing.T, path, data string) {
 	}
 }
 
-func TestReviewPaneTitlesEveryWindow(t *testing.T) {
-	r := reviewServer(t)
+func TestIntegrationPaneTitlesEveryWindow(t *testing.T) {
+	r := integrationServer(t)
 	yes := true
-	id := reviewCreate(t, r, &config.Config{Session: config.Session{Name: "titles", Root: t.TempDir(), EnablePaneTitles: &yes}, Windows: []config.Window{{Name: "one"}, {Name: "two"}}})
+	id := integrationCreate(t, r, &config.Config{Session: config.Session{Name: "titles", Root: t.TempDir(), EnablePaneTitles: &yes}, Windows: []config.Window{{Name: "one"}, {Name: "two"}}})
 	wins, err := tmux.ListWindows(r, id)
 	if err != nil {
 		t.Fatal(err)
@@ -75,8 +79,8 @@ func TestReviewPaneTitlesEveryWindow(t *testing.T) {
 	}
 }
 
-func TestReviewNestedRootAndRun(t *testing.T) {
-	r := reviewServer(t)
+func TestIntegrationNestedRootAndRun(t *testing.T) {
+	r := integrationServer(t)
 	root := t.TempDir()
 	child := filepath.Join(root, "child")
 	if err := os.Mkdir(child, 0700); err != nil {
@@ -84,7 +88,7 @@ func TestReviewNestedRootAndRun(t *testing.T) {
 	}
 	yes := true
 	cfg := &config.Config{Session: config.Session{Name: "nested", Root: root}, Windows: []config.Window{{Name: "one", Splits: []config.Split{{Children: []config.Split{{Root: "child", Env: map[string]string{"NESTED": "leaf"}, Run: `printf '%s\n%s\n' "$NESTED" "$PWD" > "$PWD/result"`, RemainOnExit: &yes}, {Type: "v"}}}, {Type: "h"}}}}}
-	id := reviewCreate(t, r, cfg)
+	id := integrationCreate(t, r, cfg)
 	deadline := time.Now().Add(3 * time.Second)
 	for {
 		out, err := r.Run("list-panes", "-t", id, "-F", "#{pane_id}|#{pane_dead}")
@@ -106,10 +110,10 @@ func TestReviewNestedRootAndRun(t *testing.T) {
 	}
 }
 
-func TestReviewRemainOnExitFastProcess(t *testing.T) {
-	r := reviewServer(t)
+func TestIntegrationRemainOnExitFastProcess(t *testing.T) {
+	r := integrationServer(t)
 	yes := true
-	id := reviewCreate(t, r, &config.Config{Session: config.Session{Name: "fast", Root: t.TempDir()}, Windows: []config.Window{{Name: "one", RemainOnExit: &yes, Splits: []config.Split{{Run: "true", RemainOnExit: &yes}}}}})
+	id := integrationCreate(t, r, &config.Config{Session: config.Session{Name: "fast", Root: t.TempDir()}, Windows: []config.Window{{Name: "one", RemainOnExit: &yes, Splits: []config.Split{{Run: "true", RemainOnExit: &yes}}}}})
 	deadline := time.Now().Add(3 * time.Second)
 	for {
 		out, err := r.Run("list-panes", "-t", id, "-F", "#{pane_dead}")
@@ -126,10 +130,10 @@ func TestReviewRemainOnExitFastProcess(t *testing.T) {
 	}
 }
 
-func TestReviewSynchronizedStartup(t *testing.T) {
+func TestIntegrationSynchronizedStartup(t *testing.T) {
 	for _, inherited := range []bool{false, true} {
 		t.Run(fmt.Sprint(inherited), func(t *testing.T) {
-			r := reviewServer(t)
+			r := integrationServer(t)
 			yes := true
 			var sync *bool
 			if inherited {
@@ -139,7 +143,7 @@ func TestReviewSynchronizedStartup(t *testing.T) {
 			} else {
 				sync = &yes
 			}
-			id := reviewCreate(t, r, &config.Config{Session: config.Session{Name: "sync", Root: t.TempDir()}, Windows: []config.Window{{Name: "one", Synchronize: sync, Splits: []config.Split{{Command: "printf 'FIRST\\n'"}, {Type: "h", Command: "printf 'SECOND\\n'"}}}}})
+			id := integrationCreate(t, r, &config.Config{Session: config.Session{Name: "sync", Root: t.TempDir()}, Windows: []config.Window{{Name: "one", Synchronize: sync, Splits: []config.Split{{Command: "printf 'FIRST\\n'"}, {Type: "h", Command: "printf 'SECOND\\n'"}}}}})
 			wins, err := tmux.ListWindows(r, id)
 			if err != nil {
 				t.Fatal(err)
@@ -191,11 +195,11 @@ func TestReviewSynchronizedStartup(t *testing.T) {
 	}
 }
 
-func TestReviewRestartInvalidRootPreservesSession(t *testing.T) {
+func TestIntegrationRestartInvalidRootPreservesSession(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	path := filepath.Join(t.TempDir(), ".wyrm.toml")
 	t.Setenv("WYRM_REVIEW_MISSING_ROOT", "")
-	reviewWrite(t, path, "[session]\nname='review'\nroot='.'\n[[windows]]\nname='one'\nroot='${WYRM_REVIEW_UNDEFINED_PATH}'\n")
+	integrationWrite(t, path, "[session]\nname='review'\nroot='.'\n[[windows]]\nname='one'\nroot='${WYRM_REVIEW_UNDEFINED_PATH}'\n")
 	r := &fakeRunner{listOutput: "$1|review"}
 	var out, errs bytes.Buffer
 	code := run([]string{"restart", "-d", "-config", path}, &out, &errs, r, func() bool { return false }, func(string) error { return nil })
@@ -209,7 +213,7 @@ func TestReviewRestartInvalidRootPreservesSession(t *testing.T) {
 	}
 }
 
-func TestReviewMigrationPreservesOwnerAndRoot(t *testing.T) {
+func TestIntegrationMigrationPreservesOwnerAndRoot(t *testing.T) {
 	for _, rootValue := range []string{".", "backend"} {
 		t.Run(rootValue, func(t *testing.T) {
 			t.Setenv("XDG_CONFIG_HOME", t.TempDir())
@@ -222,9 +226,9 @@ func TestReviewMigrationPreservesOwnerAndRoot(t *testing.T) {
 				t.Fatal(err)
 			}
 			src := filepath.Join(root, ".wyrm.toml")
-			reviewWrite(t, src, "['session'] # project\nroot='"+rootValue+"'\n[[windows]]\nname='one'\n")
+			integrationWrite(t, src, "['session'] # project\nroot='"+rootValue+"'\n[[windows]]\nname='one'\n")
 			settingsPath, _ := config.SettingsPath()
-			reviewWrite(t, settingsPath, "storage='shared'\n")
+			integrationWrite(t, settingsPath, "storage='shared'\n")
 			t.Chdir(child)
 			var out, errs bytes.Buffer
 			a := &app{stdout: &out, stderr: &errs}
@@ -256,7 +260,7 @@ func TestReviewMigrationPreservesOwnerAndRoot(t *testing.T) {
 	}
 }
 
-func TestReviewNumericWindowName(t *testing.T) {
+func TestIntegrationNumericWindowName(t *testing.T) {
 	r := &fakeRunner{listOutput: "$1|review", listWindowsOutput: "0|@0|1|layout|first\n1|@1|0|layout|0"}
 	id, err := resolveSendTarget(r, "review:0")
 	if err != nil || id != "@1" {
@@ -264,7 +268,7 @@ func TestReviewNumericWindowName(t *testing.T) {
 	}
 }
 
-func TestReviewBulkKillFailureExit(t *testing.T) {
+func TestIntegrationBulkKillFailureExit(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Chdir(t.TempDir())
 	r := &fakeRunner{listOutput: "$1|review", fail: map[string]bool{"kill-session": true}}
@@ -275,7 +279,7 @@ func TestReviewBulkKillFailureExit(t *testing.T) {
 	}
 }
 
-func TestReviewDryRunAttachHook(t *testing.T) {
+func TestIntegrationDryRunAttachHook(t *testing.T) {
 	path := writeConfig(t, "[session]\nname='review'\non_project_attach='echo attachment'\n[[windows]]\nname='one'\n")
 	for _, verb := range []string{"up", "restart"} {
 		for _, detached := range []bool{false, true} {
@@ -295,11 +299,11 @@ func TestReviewDryRunAttachHook(t *testing.T) {
 	}
 }
 
-func TestReviewLiveSessionDoesNotRunAliasHook(t *testing.T) {
+func TestIntegrationLiveSessionDoesNotRunAliasHook(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	root := t.TempDir()
 	t.Chdir(root)
-	reviewWrite(t, filepath.Join(root, ".wyrm.toml"), "[session]\nname='owner'\naliases=['live']\non_project_attach='touch wrong-hook'\n[[windows]]\nname='one'\n")
+	integrationWrite(t, filepath.Join(root, ".wyrm.toml"), "[session]\nname='owner'\naliases=['live']\non_project_attach='touch wrong-hook'\n[[windows]]\nname='one'\n")
 	r := &fakeRunner{listOutput: "$1|live", lastSessionName: "live"}
 	var out, errs bytes.Buffer
 	if code := run([]string{"live"}, &out, &errs, r, func() bool { return false }, func(string) error { return nil }); code != 0 {
@@ -310,11 +314,11 @@ func TestReviewLiveSessionDoesNotRunAliasHook(t *testing.T) {
 	}
 }
 
-func TestReviewBulkRestartFailureAndNames(t *testing.T) {
+func TestIntegrationBulkRestartFailureAndNames(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	root := t.TempDir()
 	t.Chdir(root)
-	reviewWrite(t, filepath.Join(root, ".wyrm.toml"), "[session]\nname='review'\naliases=['alias']\n[[windows]]\nname='one'\n")
+	integrationWrite(t, filepath.Join(root, ".wyrm.toml"), "[session]\nname='review'\naliases=['alias']\n[[windows]]\nname='one'\n")
 	var out, errs bytes.Buffer
 	r := &fakeRunner{listOutput: "$1|review", fail: map[string]bool{"kill-session": true}}
 	if code := run([]string{"restart", "-all", "-y"}, &out, &errs, r, func() bool { return false }, func(string) error { return nil }); code == 0 {
@@ -329,7 +333,7 @@ func TestReviewBulkRestartFailureAndNames(t *testing.T) {
 	}
 }
 
-func TestReviewDiagnosticsAllowBrokenSettings(t *testing.T) {
+func TestIntegrationDiagnosticsAllowBrokenSettings(t *testing.T) {
 	for _, cmd := range []string{"doctor", "help", "version", "--help", "--version"} {
 		if !settingsOptional([]string{cmd}) {
 			t.Errorf("%s requires settings", cmd)

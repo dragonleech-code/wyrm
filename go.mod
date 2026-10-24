@@ -2,7 +2,7 @@ module github.com/jskoll/wyrm
 
 go 1.25.0
 
-toolchain go1.25.14
+toolchain go1.26.10
 
 require (
 	github.com/charmbracelet/bubbles v1.0.0

@@ -15,7 +15,7 @@
 # not "--config"), hence "-o" (old-style option) below rather than fish's
 # usual "-l" (GNU-style long option).
 
-set -l subcommands up restart kill pick tui save edit validate status send setup-tmux list list-configs migrate-config clone init selfupdate doctor version help
+set -l subcommands up restart kill pick tui save edit validate status send setup-tmux list list-configs migrate-config clone init selfupdate doctor version help allow deny diff wait agent worktree schema
 
 # Don't fall back to filename completion.
 complete -c wyrm -f
@@ -39,6 +39,13 @@ complete -c wyrm -n "not __fish_seen_subcommand_from $subcommands" -a init -d 's
 complete -c wyrm -n "not __fish_seen_subcommand_from $subcommands" -a selfupdate -d 'download and install the latest release'
 complete -c wyrm -n "not __fish_seen_subcommand_from $subcommands" -a setup-tmux -d 'generate or append recommended tmux popup configuration'
 complete -c wyrm -n "not __fish_seen_subcommand_from $subcommands" -a doctor -d 'check tmux, settings, configs, and optional tools'
+complete -c wyrm -n "not __fish_seen_subcommand_from $subcommands" -a allow -d 'trust a project config so wyrm runs its commands'
+complete -c wyrm -n "not __fish_seen_subcommand_from $subcommands" -a deny -d 'refuse a project config'
+complete -c wyrm -n "not __fish_seen_subcommand_from $subcommands" -a diff -d 'show how the running session differs from its config'
+complete -c wyrm -n "not __fish_seen_subcommand_from $subcommands" -a wait -d 'wait for a port, file, or URL to be ready'
+complete -c wyrm -n "not __fish_seen_subcommand_from $subcommands" -a agent -d 'jump to or approve a waiting agent'
+complete -c wyrm -n "not __fish_seen_subcommand_from $subcommands" -a worktree -d 'create a git worktree and start a session in it'
+complete -c wyrm -n "not __fish_seen_subcommand_from $subcommands" -a schema -d 'print the JSON Schema for .wyrm.toml'
 complete -c wyrm -n "not __fish_seen_subcommand_from $subcommands" -a version -d 'print version and exit'
 complete -c wyrm -n "not __fish_seen_subcommand_from $subcommands" -a help -d 'show help'
 # ...and running session names (bare `wyrm <name>` attaches by name).
@@ -47,7 +54,20 @@ complete -c wyrm -n "not __fish_seen_subcommand_from $subcommands" -a '(wyrm lis
 complete -c wyrm -n '__fish_seen_subcommand_from list-configs' -o names -d 'project names and aliases'
 
 # Subcommand flags.
-complete -c wyrm -n '__fish_seen_subcommand_from up restart kill edit validate' -o config -d 'config file path' -r -a '(wyrm list-configs 2>/dev/null)'
+complete -c wyrm -n '__fish_seen_subcommand_from up restart kill edit validate diff' -o config -d 'config file path' -r -a '(wyrm list-configs 2>/dev/null)'
+complete -c wyrm -n '__fish_seen_subcommand_from up' -o reconcile -d 'add missing windows to the running session'
+complete -c wyrm -n '__fish_seen_subcommand_from up kill' -o host -d 'ssh host to run the session on' -x
+complete -c wyrm -n '__fish_seen_subcommand_from validate' -o explain -d 'show where wyrm looked for a config'
+complete -c wyrm -n '__fish_seen_subcommand_from allow' -o list -d 'list trusted and denied configs'
+complete -c wyrm -n '__fish_seen_subcommand_from allow' -o revoke -d 'forget the decision about the config'
+complete -c wyrm -n '__fish_seen_subcommand_from diff' -o format -d 'output format' -x -a 'text json'
+complete -c wyrm -n '__fish_seen_subcommand_from diff kill' -a '(wyrm list-configs -names 2>/dev/null)' -d 'project'
+complete -c wyrm -n '__fish_seen_subcommand_from wait' -o timeout -d 'give up after this long' -x
+complete -c wyrm -n '__fish_seen_subcommand_from agent; and not __fish_seen_subcommand_from next approve' -a 'next approve'
+complete -c wyrm -n '__fish_seen_subcommand_from agent' -o state -d 'which agents to visit' -x -a 'blocked idle any'
+complete -c wyrm -n '__fish_seen_subcommand_from worktree' -o base -d 'start a new branch from this ref' -x
+complete -c wyrm -n '__fish_seen_subcommand_from worktree' -o path -d 'where to put the worktree' -r
+complete -c wyrm -n '__fish_seen_subcommand_from worktree' -o d -d 'start the session without attaching'
 complete -c wyrm -n '__fish_seen_subcommand_from up restart' -o d -d 'build the session without attaching'
 complete -c wyrm -n '__fish_seen_subcommand_from up restart' -o n -d 'dry run: print without touching tmux'
 complete -c wyrm -n '__fish_seen_subcommand_from kill' -o n -d 'print the hook and kill that would run, without touching tmux'
@@ -67,7 +87,7 @@ complete -c wyrm -n '__fish_seen_subcommand_from init' -o template -d 'starter t
 complete -c wyrm -n '__fish_seen_subcommand_from init' -o t -d 'starter template' -x -a 'node python go rust monorepo minimal'
 complete -c wyrm -n '__fish_seen_subcommand_from init' -o force -d 'overwrite existing config without prompting'
 complete -c wyrm -n '__fish_seen_subcommand_from init' -o f -d 'overwrite existing config without prompting'
-complete -c wyrm -n '__fish_seen_subcommand_from status' -o format -d 'output format' -x -a 'text json tmux waybar sketchybar'
+complete -c wyrm -n '__fish_seen_subcommand_from status' -o format -d 'output format' -x -a 'text json jsonl tmux waybar sketchybar'
 complete -c wyrm -n '__fish_seen_subcommand_from status' -o session -d 'filter to session' -x
 complete -c wyrm -n '__fish_seen_subcommand_from status' -o v -d 'verbose output'
 complete -c wyrm -n '__fish_seen_subcommand_from status' -o watch -d 'continuously stream status output'

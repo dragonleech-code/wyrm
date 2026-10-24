@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/jskoll/wyrm/internal/config"
+	"github.com/jskoll/wyrm/internal/trust"
 )
 
 // clone runs `git clone`, then behaves like a bare `wyrm up` run from inside
@@ -86,107 +87,41 @@ func (a *app) clone(args []string) error {
 		}
 	}
 
-	if !*yes {
-		ok, err := a.confirmClonedConfig(settings, project, useWildcard)
-		if err != nil {
+	// The repository is one the user hasn't read yet, so this is exactly the
+	// case the trust prompt exists for: up and startProject show the shell
+	// the config would run and ask first. -y answers yes in advance.
+	if *yes && !useWildcard {
+		if err := trustResolved(settings); err != nil {
 			return err
 		}
-		if !ok {
-			_, _ = fmt.Fprintf(a.stdout,
-				"cloned %s to %s; not started\nreview the config, then run `wyrm` in that directory\n", repo, absDest)
-			return nil
-		}
 	}
-
+	var startErr error
 	if useWildcard {
-		return a.startProject(project, nil)
-	}
-	return a.up(nil)
-}
-
-// confirmClonedConfig shows the shell a freshly cloned repository's config
-// would run and asks whether to go ahead.
-//
-// wyrm configs execute shell by design, and that is the documented trust
-// model — but `wyrm clone` is the one verb whose input is a repository the
-// user has not read yet. It used to print "run with -no-start to clone
-// without executing hooks" and then execute them anyway, naming the flag you
-// needed *before* you ran the command. Now the choice is offered while it can
-// still be made.
-//
-// promptConfirm returns false when stdin cannot be read, so a non-interactive
-// run declines rather than proceeding unattended.
-func (a *app) confirmClonedConfig(settings *config.Settings, project config.Project, useWildcard bool) (bool, error) {
-	var cfg *config.Config
-	var err error
-	if useWildcard {
-		cfg, err = project.LoadConfig()
+		startErr = a.startProject(settings, project, nil)
 	} else {
-		// The config `up` will actually use, which is not necessarily one in
-		// the clone: discovery also reaches the shared directory and parent
-		// directories.
-		cfg, _, err = config.ResolveEffective(settings, "")
+		startErr = a.up(nil)
 	}
+	if errors.Is(startErr, errUntrusted) {
+		_, _ = fmt.Fprintf(a.stdout,
+			"cloned %s to %s; not started\nreview the config, then run `wyrm` in that directory\n", repo, absDest)
+		return nil
+	}
+	return startErr
+}
+
+// trustResolved records the config a bare `wyrm` here would use as trusted,
+// for `clone -y`.
+func trustResolved(settings *config.Settings) error {
+	cfg, _, err := config.ResolveEffective(settings, "")
+	if err != nil || !trust.Required(settings, cfg) {
+		// A config that fails to load is reported properly by up.
+		return nil //nolint:nilerr
+	}
+	store, err := trust.Load()
 	if err != nil {
-		// Nothing loadable to inspect; `up` will report the same failure
-		// properly, with its own message.
-		return true, nil //nolint:nilerr
+		return err
 	}
-	commands := configCommands(cfg)
-	if len(commands) == 0 {
-		return true, nil
-	}
-	_, _ = fmt.Fprintf(a.stderr, "wyrm: this config runs shell commands:\n")
-	for _, c := range commands {
-		_, _ = fmt.Fprintf(a.stderr, "  %s\n", c)
-	}
-	return a.promptConfirm("Start the session and run them? (y/N): "), nil
-}
-
-// configCommands lists every piece of shell a config would execute, labelled
-// by where it comes from. Hooks run as real subprocesses; pane commands are
-// typed into a shell. Both execute, so both are shown — the old check looked
-// only at on_project_start and on_project_first_start.
-func configCommands(cfg *config.Config) []string {
-	var out []string
-	add := func(label, cmd string) {
-		if cmd != "" {
-			out = append(out, label+" = "+cmd)
-		}
-	}
-	add("on_project_start", cfg.Session.OnProjectStart)
-	add("on_project_first_start", cfg.Session.OnProjectFirstStart)
-	add("on_project_restart", cfg.Session.OnProjectRestart)
-	add("on_project_attach", cfg.Session.OnProjectAttach)
-	add("on_project_exit", cfg.Session.OnProjectExit)
-	add("on_project_detach", cfg.Session.OnProjectDetach)
-	if cfg.Session.EnablePaneTitles != nil && *cfg.Session.EnablePaneTitles && strings.Contains(cfg.Session.PaneTitleFormat, "#(") {
-		add("pane_title_format (tmux command substitution)", cfg.Session.PaneTitleFormat)
-	}
-	for _, w := range cfg.Windows {
-		where := "window " + w.Name
-		add(where+" pre_window", w.PreWindow)
-		add(where+" post_window", w.PostWindow)
-		out = append(out, splitCommands(where, w.Splits)...)
-		for _, p := range w.Panes {
-			add(where+" pane", p.Command)
-		}
-	}
-	return out
-}
-
-func splitCommands(where string, splits []config.Split) []string {
-	var out []string
-	for _, s := range splits {
-		if s.Command != "" {
-			out = append(out, where+" command = "+s.Command)
-		}
-		if s.Run != "" {
-			out = append(out, where+" run = "+s.Run)
-		}
-		out = append(out, splitCommands(where, s.Children)...)
-	}
-	return out
+	return store.Allow(cfg.Path(), cfg.Fingerprint())
 }
 
 // deriveCloneDir mirrors git's own destination-directory derivation when no

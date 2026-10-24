@@ -27,9 +27,13 @@ main.go            subcommand dispatch, error/exit-code policy, shared helpers
 cmd_session.go     up, restart, kill, attach-by-name
 cmd_config.go      edit, validate, save, migrate-config, list-configs, init
 cmd_ui.go          pick, tui, list
-internal/config/   TOML types, parsing, validation, settings, project discovery
-internal/tmux/     Runner interface, real exec implementation, dry-run recorder
-internal/session/  session creation/teardown (tested against a mock Runner)
+cmd_trust.go       allow, deny, and the trust prompt every verb that runs a config goes through
+cmd_*.go           the rest: diff/wait, agent, worktree, workspaces (@name), remote (-host), ...
+internal/config/   TOML types, parsing, validation, extends, settings, project discovery
+internal/trust/    which project configs the user has agreed to run (trust.toml)
+internal/wait/     readiness checks behind wait_for and `wyrm wait`
+internal/tmux/     Runner interface, real exec, ssh, and dry-run implementations
+internal/session/  session creation/teardown/reconcile/diff (tested against a mock Runner)
 internal/sessions/ listing/killing/matching running sessions — no rendering
 internal/freeze/   the reverse of session: a live tmux layout -> a config
 internal/agent/    classifying what an AI agent in a pane is doing

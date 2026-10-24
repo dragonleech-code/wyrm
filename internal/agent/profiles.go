@@ -40,6 +40,7 @@ func ProfilesFrom(settings *config.Settings) ([]Profile, error) {
 			Blocked:     p.Blocked,
 			Idle:        p.Idle,
 			BusyPattern: p.BusyPattern,
+			Approve:     p.Approve,
 		}.Compile()
 		if err != nil {
 			return nil, fmt.Errorf("tui.agent.profiles[%d]: %w", i, err)

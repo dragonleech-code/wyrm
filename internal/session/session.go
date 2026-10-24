@@ -7,6 +7,7 @@
 package session
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -15,9 +16,11 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jskoll/wyrm/internal/config"
 	"github.com/jskoll/wyrm/internal/tmux"
+	"github.com/jskoll/wyrm/internal/wait"
 )
 
 // ErrSessionNotRunning is Kill's error when the config's session isn't
@@ -35,6 +38,51 @@ type options struct {
 	dryRun     bool
 	transcript io.Writer
 	history    HookHistory
+
+	// noHooks skips every lifecycle hook and post_window command; see SkipHooks.
+	noHooks bool
+	// hookTimeout bounds each hook; zero is no limit. Set from the config's
+	// session.hook_timeout by each entry point.
+	hookTimeout time.Duration
+	// hookRunner executes a hook. Nil runs it locally through $SHELL.
+	hookRunner HookRunner
+	// waitCommand is the wyrm binary a wait_for gate invokes. Empty resolves
+	// os.Executable when a gate is first needed.
+	waitCommand string
+}
+
+// HookSpec is one hook to execute.
+type HookSpec struct {
+	Label   string
+	Command string
+	Dir     string
+	// Env is the hook's extra KEY=VALUE pairs, on top of the inherited
+	// environment.
+	Env     []string
+	Timeout time.Duration
+	Stderr  io.Writer
+}
+
+// HookRunner executes a hook. The default runs it locally; a remote build
+// substitutes one that runs it on the remote host.
+type HookRunner func(HookSpec) error
+
+// WithHookRunner replaces how hooks are executed.
+func WithHookRunner(fn HookRunner) Option {
+	return func(o *options) { o.hookRunner = fn }
+}
+
+// SkipHooks builds or destroys the session without running any lifecycle hook
+// or post_window command. It is how `wyrm kill` still stops a session whose
+// config the user has declined to trust.
+func SkipHooks() Option {
+	return func(o *options) { o.noHooks = true }
+}
+
+// WithWaitCommand sets the wyrm binary wait_for gates call. Tests pin it so a
+// transcript doesn't depend on where the test binary was built.
+func WithWaitCommand(path string) Option {
+	return func(o *options) { o.waitCommand = path }
 }
 
 // HookHistory tells Create whether a project has started a session before,
@@ -77,6 +125,36 @@ func DryRun(w io.Writer) Option {
 	return func(o *options) { o.dryRun, o.transcript = true, w }
 }
 
+// resolveWaitCommand returns the wyrm binary for wait_for gates, looking it up
+// only when the config actually uses one.
+func (o *options) resolveWaitCommand(cfg *config.Config) string {
+	if o.waitCommand != "" || !usesWaitFor(cfg) {
+		return o.waitCommand
+	}
+	if exe, err := os.Executable(); err == nil {
+		o.waitCommand = exe
+	}
+	return o.waitCommand
+}
+
+func usesWaitFor(cfg *config.Config) bool {
+	var walk func([]config.Split) bool
+	walk = func(splits []config.Split) bool {
+		for _, s := range splits {
+			if s.WaitFor != "" || walk(s.Children) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, w := range cfg.Windows {
+		if walk(w.Splits) {
+			return true
+		}
+	}
+	return false
+}
+
 func newOptions(opts []Option) options {
 	var o options
 	for _, opt := range opts {
@@ -105,6 +183,7 @@ func newOptions(opts []Option) options {
 // stdout/stderr throughout the CLI.
 func Create(r tmux.Runner, cfg *config.Config, stdout, stderr io.Writer, opts ...Option) (name, sessionID string, created bool, err error) {
 	o := newOptions(opts)
+	o.hookTimeout, _ = cfg.Session.HookTimeoutDuration() // validated on load
 
 	name, root, err := cfg.Session.Resolve(cfg.Dir())
 	if err != nil {
@@ -130,13 +209,10 @@ func Create(r tmux.Runner, cfg *config.Config, stdout, stderr io.Writer, opts ..
 	}
 
 	// Every root the build will need is resolved and validated before any
-	// hook runs or lifecycle state is recorded. A malformed window or split
-	// root — an unset $VAR, say — used to be discovered only after
-	// on_project_start and on_project_first_start had already run (the
-	// latter doing real, possibly expensive setup work) and first-start had
-	// already been marked in history: fixing the config and retrying then
-	// fired on_project_restart instead, even though nothing had actually
-	// been built the first time.
+	// hook runs or lifecycle state is recorded. Otherwise a malformed window
+	// or split root — an unset $VAR, say — would surface only after
+	// on_project_first_start had done its setup and been recorded, and the
+	// retry after fixing the config would fire on_project_restart instead.
 	if err := ValidateRoots(cfg); err != nil {
 		return "", "", false, err
 	}
@@ -173,6 +249,7 @@ func Create(r tmux.Runner, cfg *config.Config, stdout, stderr io.Writer, opts ..
 	windowIDs := make([]string, len(cfg.Windows))
 	syncStates := make([]string, len(cfg.Windows))
 
+	waitCommand := o.resolveWaitCommand(cfg)
 	for i, w := range cfg.Windows {
 		windowID, paneID := first.windowID, first.paneID
 		if i > 0 {
@@ -183,24 +260,11 @@ func Create(r tmux.Runner, cfg *config.Config, stdout, stderr io.Writer, opts ..
 			}
 		}
 		windowIDs[i] = windowID
-		// send-keys obeys synchronize-panes, including an inherited global
-		// setting. Temporarily disable it throughout initialization. Only the
-		// window's own value is recorded (no -A): an inherited value must be
-		// restored by unsetting, not by copying it onto the window, or a later
-		// change to the global setting would stop reaching this window.
-		out, serr := r.Run("show-options", "-w", "-v", "-t", windowID, "synchronize-panes")
+		syncState, serr := populateWindow(r, cfg, plan, i, windowID, paneID, keys, waitCommand, stdout, stderr)
 		if serr != nil {
-			return "", "", false, rollback(r, id, stderr, tmux.CmdErr(serr, out))
+			return "", "", false, rollback(r, id, stderr, serr)
 		}
-		syncStates[i] = out
-		if out, serr := r.Run("set-window-option", "-t", windowID, "synchronize-panes", "off"); serr != nil {
-			return "", "", false, rollback(r, id, stderr, tmux.CmdErr(serr, out))
-		}
-		_, _ = fmt.Fprintf(stdout, "window %s: %s\n", windowID, w.Name)
-		buildWindow(r, windowID, paneID, w, splitCtx{
-			root: plan.roots[i], envMap: plan.envs[i], preWindow: w.PreWindow, keys: keys,
-		}, stderr)
-		enablePaneTitles(r, windowID, cfg.Session, stderr)
+		syncStates[i] = syncState
 	}
 
 	// Every pane now exists, so every target is known: type the lot.
@@ -212,6 +276,53 @@ func Create(r tmux.Runner, cfg *config.Config, stdout, stderr io.Writer, opts ..
 		}
 	}
 	return name, id, true, nil
+}
+
+// populateWindow lays out window i of cfg in a window tmux has just created,
+// queueing its commands on keys, and returns the window's own
+// synchronize-panes value for restoreSync to put back.
+//
+// send-keys obeys synchronize-panes, including an inherited global setting,
+// so it is turned off for the duration of the build. Only the window's own
+// value is recorded (no -A): an inherited value must be restored by unsetting,
+// not by copying it onto the window, or a later change to the global setting
+// would stop reaching this window.
+func populateWindow(r tmux.Runner, cfg *config.Config, plan windowPlan, i int, windowID, paneID string, keys *keyBatch, waitCommand string, stdout, stderr io.Writer) (string, error) {
+	w := cfg.Windows[i]
+	syncState, err := r.Run("show-options", "-w", "-v", "-t", windowID, "synchronize-panes")
+	if err != nil {
+		return "", tmux.CmdErr(err, syncState)
+	}
+	if out, err := r.Run("set-window-option", "-t", windowID, "synchronize-panes", "off"); err != nil {
+		return "", tmux.CmdErr(err, out)
+	}
+	_, _ = fmt.Fprintf(stdout, "window %s: %s\n", windowID, w.Name)
+	buildWindow(r, windowID, paneID, w, splitCtx{
+		root: plan.roots[i], envMap: plan.envs[i], preWindow: w.PreWindow, keys: keys,
+		waitCommand: waitCommand,
+	}, stderr)
+	enablePaneTitles(r, windowID, cfg.Session, stderr)
+	return syncState, nil
+}
+
+// restoreSync puts a window's synchronize-panes back once its commands have
+// been typed: the config's synchronize setting if it has one, otherwise
+// whatever the window had before populateWindow turned it off.
+func restoreSync(r tmux.Runner, w config.Window, windowID, syncState string, stderr io.Writer) {
+	setting := w.Synchronize
+	if setting == nil {
+		setting = w.SynchronizePanes
+	}
+	if setting != nil {
+		syncState = boolOption(*setting)
+	}
+	args := []string{"set-window-option", "-t", windowID, "synchronize-panes", syncState}
+	if syncState == "" {
+		args = []string{"set-window-option", "-u", "-t", windowID, "synchronize-panes"}
+	}
+	if out, err := r.Run(args...); err != nil {
+		warnf(stderr, "restoring synchronize-panes: %v", tmux.CmdErr(err, out))
+	}
 }
 
 type windowPlan struct {
@@ -237,7 +348,7 @@ func prepareWindows(cfg *config.Config, root string) (windowPlan, error) {
 		p.initRoots[i], p.initEnvs[i] = wr, p.envs[i]
 		// The first split's root and env override the initial pane's values.
 		if len(w.Splits) > 0 && w.Splits[0].Type == "" {
-			p.initRoots[i], p.initEnvs[i], _ = paneAttributes(w.Splits[0], wr, p.envs[i])
+			p.initRoots[i], p.initEnvs[i], _, _ = paneAttributes(w.Splits[0], wr, p.envs[i])
 		}
 	}
 	return p, nil
@@ -246,24 +357,7 @@ func prepareWindows(cfg *config.Config, root string) (windowPlan, error) {
 // finishWindows restores tmux options and applies post-build session policy.
 func finishWindows(r tmux.Runner, cfg *config.Config, o options, plan windowPlan, id, firstWindowID string, windowIDs, syncStates []string, stderr io.Writer) {
 	for i, w := range cfg.Windows {
-		syncState := syncStates[i]
-		setting := w.Synchronize
-		if setting == nil {
-			setting = w.SynchronizePanes
-		}
-		if setting != nil {
-			syncState = "off"
-			if *setting {
-				syncState = "on"
-			}
-		}
-		args := []string{"set-window-option", "-t", windowIDs[i], "synchronize-panes", syncState}
-		if syncState == "" {
-			args = []string{"set-window-option", "-u", "-t", windowIDs[i], "synchronize-panes"}
-		}
-		if out, err := r.Run(args...); err != nil {
-			warnf(stderr, "restoring synchronize-panes: %v", tmux.CmdErr(err, out))
-		}
+		restoreSync(r, w, windowIDs[i], syncStates[i], stderr)
 	}
 
 	// post_window runs only now — a real subprocess, unlike pre_window's
@@ -373,6 +467,7 @@ func RunAttachHook(cfg *config.Config, stderr io.Writer, opts ...Option) error {
 		return nil
 	}
 	o := newOptions(opts)
+	o.hookTimeout, _ = cfg.Session.HookTimeoutDuration()
 	_, root, err := cfg.Session.Resolve(cfg.Dir())
 	if err != nil {
 		root = cfg.Dir()
@@ -479,6 +574,7 @@ func rollback(r tmux.Runner, sessionID string, stderr io.Writer, cause error) er
 // rather than performed.
 func Kill(r tmux.Runner, cfg *config.Config, stderr io.Writer, opts ...Option) (string, error) {
 	o := newOptions(opts)
+	o.hookTimeout, _ = cfg.Session.HookTimeoutDuration()
 
 	name, root, err := cfg.Session.Resolve(cfg.Dir())
 	if err != nil {
@@ -537,7 +633,7 @@ func paneProcess(w config.Window) []string {
 		return nil
 	}
 	first := w.Splits[0]
-	_, _, command := paneAttributes(first, "", nil)
+	_, _, command, _ := paneAttributes(first, "", nil)
 	if first.Type != "" || command == "" {
 		return nil
 	}
@@ -551,19 +647,21 @@ const startupWaitCommand = "exec sleep 2147483647"
 
 // Leading children reuse their parent's physical pane. Resolve their creation
 // attributes before creating that pane, without changing sibling inheritance.
-func paneAttributes(s config.Split, base string, env map[string]string) (string, map[string]string, string) {
-	root, _ := config.ResolveRoot(base, s.Root) // ValidateRoots already checked it.
+// src is the entry the returned run command came from, so its wait_for gates
+// it.
+func paneAttributes(s config.Split, base string, env map[string]string) (root string, _ map[string]string, command string, src config.Split) {
+	root, _ = config.ResolveRoot(base, s.Root) // ValidateRoots already checked it.
 	env = mergeEnv(env, s.Env)
-	command := s.Run
+	command, src = s.Run, s
 	for len(s.Children) > 0 && s.Children[0].Type == "" {
 		s = s.Children[0]
 		root, _ = config.ResolveRoot(root, s.Root)
 		env = mergeEnv(env, s.Env)
 		if s.Run != "" {
-			command = s.Run
+			command, src = s.Run, s
 		}
 	}
-	return root, env, command
+	return root, env, command, src
 }
 
 func buildWindow(r tmux.Runner, windowID, initialPane string, w config.Window, ctx splitCtx, stderr io.Writer) {
@@ -629,6 +727,32 @@ type splitCtx struct {
 	done          map[string]bool
 	keys          *keyBatch
 	onPaneCreated func(paneID string, s config.Split)
+	// waitCommand is the wyrm binary a wait_for gate runs; see gate.
+	waitCommand string
+}
+
+// gate prefixes command with a `wyrm wait` for the split's wait_for, so the
+// pane opens at once but its command only starts when the dependency is
+// ready. The pane's shell (or, for run, the shell tmux starts it with) runs
+// "wyrm wait ... && command", which every POSIX shell and fish 3+ accept.
+//
+// The binary path and spec go in single quotes. wait.Parse already refuses a
+// quote in the spec; a binary path containing one can't be quoted the same way
+// in every shell, so the gate is dropped with a warning rather than guessed.
+func (ctx splitCtx) gate(s config.Split, command string, stderr io.Writer) string {
+	if s.WaitFor == "" || command == "" || strings.HasPrefix(command, "#") {
+		return command
+	}
+	exe := ctx.waitCommand
+	if exe == "" || strings.Contains(exe, "'") {
+		warnf(stderr, "cannot locate wyrm for wait_for %q; starting the command without waiting", s.WaitFor)
+		return command
+	}
+	timeout, _ := s.WaitTimeoutDuration() // validated on load
+	if timeout == 0 {
+		timeout = wait.DefaultTimeout
+	}
+	return fmt.Sprintf("'%s' wait -timeout %s '%s' && %s", exe, timeout, s.WaitFor, command)
 }
 
 // applySplits walks a split tree. Each entry with a type splits the pane of
@@ -659,7 +783,7 @@ func applySplits(r tmux.Runner, basePane string, splits []config.Split, ctx spli
 		splitEnvs[i] = splitEnv
 
 		pane := current
-		paneRoot, paneEnv, command := paneAttributes(s, ctx.root, ctx.envMap)
+		paneRoot, paneEnv, command, src := paneAttributes(s, ctx.root, ctx.envMap)
 		if s.Type != "" {
 			process := s
 			process.Run = command
@@ -676,7 +800,7 @@ func applySplits(r tmux.Runner, basePane string, splits []config.Split, ctx spli
 		panes[i] = pane
 		current = pane
 		if command != "" {
-			ctx.keys.launch(pane, paneRoot, paneEnv, command)
+			ctx.keys.launch(pane, paneRoot, paneEnv, ctx.gate(src, command, stderr))
 		}
 	}
 
@@ -700,7 +824,7 @@ func applySplits(r tmux.Runner, basePane string, splits []config.Split, ctx spli
 		// be typed into it — both would land as literal input to that process.
 		if s.Run == "" {
 			sendPreWindow(ctx.keys, pane, ctx.preWindow, ctx.done)
-			ctx.keys.add(pane, s.Command)
+			ctx.keys.add(pane, ctx.gate(s, s.Command, stderr))
 		} else {
 			// No shell, but it can still parent children.
 			ctx.done[pane] = true
@@ -1013,7 +1137,7 @@ func findStartupPane(panes []tmux.PaneInfo, index int) (string, bool) {
 // rather than stdout so hook chatter can't be confused with wyrm's own
 // progress lines.
 func runHook(o options, hook, dir, label string, env map[string]string, stderr io.Writer) error {
-	if hook == "" {
+	if hook == "" || o.noHooks {
 		return nil
 	}
 	if o.dryRun {
@@ -1023,21 +1147,46 @@ func runHook(o options, hook, dir, label string, env map[string]string, stderr i
 		_, _ = fmt.Fprintf(o.transcript, "# would run %s, in %s:\n#   %s\n", label, dir, hook)
 		return nil
 	}
+	_, _ = fmt.Fprintf(stderr, "wyrm: running %s\n", label)
+	spec := HookSpec{Label: label, Command: hook, Dir: dir, Env: envPairs(env), Timeout: o.hookTimeout, Stderr: stderr}
+	if o.hookRunner != nil {
+		return o.hookRunner(spec)
+	}
+	return RunLocalHook(spec)
+}
+
+// RunLocalHook runs a hook through $SHELL (or sh) on this machine. With a
+// timeout, the hook runs in its own process group and the whole group is
+// killed when it expires, so a `npm install` the shell started doesn't
+// outlive it.
+func RunLocalHook(spec HookSpec) error {
 	shell := os.Getenv("SHELL")
 	if shell == "" {
 		shell = "sh"
 	}
-	_, _ = fmt.Fprintf(stderr, "wyrm: running %s\n", label)
-	cmd := exec.Command(shell, "-c", hook)
-	cmd.Dir = dir
-	if len(env) > 0 {
-		cmd.Env = hookEnv(env)
+	ctx := context.Background()
+	if spec.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, spec.Timeout)
+		defer cancel()
 	}
-	cmd.Stdout, cmd.Stderr = stderr, stderr
-	if err := cmd.Run(); err != nil {
-		return err
+	cmd := exec.CommandContext(ctx, shell, "-c", spec.Command)
+	cmd.Dir = spec.Dir
+	if len(spec.Env) > 0 {
+		cmd.Env = append(os.Environ(), spec.Env...)
 	}
-	return nil
+	cmd.Stdout, cmd.Stderr = spec.Stderr, spec.Stderr
+	if spec.Timeout > 0 {
+		// Only with a timeout: a separate process group also stops a terminal
+		// Ctrl-C reaching the hook, which is what an untimed hook relies on.
+		killGroupOnCancel(cmd)
+		cmd.WaitDelay = 2 * time.Second
+	}
+	err := cmd.Run()
+	if ctx.Err() == context.DeadlineExceeded {
+		return fmt.Errorf("timed out after %s", spec.Timeout)
+	}
+	return err
 }
 
 // runFirstStartOrRestartHook fires exactly one of on_project_first_start /
@@ -1077,9 +1226,9 @@ func runFirstStartOrRestartHook(o options, cfg *config.Config, root string, stde
 	return !o.dryRun
 }
 
-// hookEnv merges the process environment with the session's configured env map,
-// sorted for deterministic ordering.
-func hookEnv(env map[string]string) []string {
+// envPairs renders a session's env map as KEY=VALUE pairs, sorted for
+// deterministic ordering.
+func envPairs(env map[string]string) []string {
 	if len(env) == 0 {
 		return nil
 	}
@@ -1088,7 +1237,7 @@ func hookEnv(env map[string]string) []string {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
-	out := append([]string(nil), os.Environ()...)
+	out := make([]string, 0, len(keys))
 	for _, k := range keys {
 		out = append(out, k+"="+env[k])
 	}

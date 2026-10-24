@@ -27,10 +27,16 @@ _wyrm_complete() {
             ;;
         -format)
             if [[ "$cmd" == status ]]; then
-                COMPREPLY=($(compgen -W "text json tmux waybar sketchybar" -- "$cur"))
+                COMPREPLY=($(compgen -W "text json jsonl tmux waybar sketchybar" -- "$cur"))
+            elif [[ "$cmd" == diff ]]; then
+                COMPREPLY=($(compgen -W "text json" -- "$cur"))
             else
                 COMPREPLY=($(compgen -W "table json toml names" -- "$cur"))
             fi
+            return
+            ;;
+        -state)
+            COMPREPLY=($(compgen -W "blocked idle any" -- "$cur"))
             return
             ;;
         -template|-t)
@@ -39,7 +45,7 @@ _wyrm_complete() {
             ;;
     esac
 
-    local subcommands="up restart kill pick tui save edit validate status send setup-tmux list list-configs migrate-config clone init selfupdate doctor version help"
+    local subcommands="up restart kill pick tui save edit validate status send setup-tmux list list-configs migrate-config clone init selfupdate doctor version help allow deny diff wait agent worktree schema"
 
     # First token: a subcommand, or a running session name to attach to.
     if [[ "$COMP_CWORD" -eq 1 ]]; then
@@ -51,14 +57,27 @@ _wyrm_complete() {
         return
     fi
 
+    # agent's action, and the project a few verbs take by name.
+    if [[ "$COMP_CWORD" -eq 2 && "$cur" != -* ]]; then
+        case "$cmd" in
+            agent) COMPREPLY=($(compgen -W "next approve" -- "$cur")); return ;;
+            diff|kill) COMPREPLY=($(compgen -W "$(wyrm list-configs -names 2>/dev/null)" -- "$cur")); return ;;
+        esac
+    fi
+
     # Subcommand-specific flags.
     if [[ "$cur" == -* ]]; then
         case "$cmd" in
-            up) COMPREPLY=($(compgen -W "-config -n -d -var" -- "$cur")) ;;
+            up) COMPREPLY=($(compgen -W "-config -n -d -var -reconcile -host" -- "$cur")) ;;
             edit) COMPREPLY=($(compgen -W "-config" -- "$cur")) ;;
-            validate) COMPREPLY=($(compgen -W "-config -strict -var" -- "$cur")) ;;
+            validate) COMPREPLY=($(compgen -W "-config -strict -explain -var" -- "$cur")) ;;
             restart) COMPREPLY=($(compgen -W "-config -n -d -all -a -yes -y -var" -- "$cur")) ;;
-            kill) COMPREPLY=($(compgen -W "-config -n -all -a -yes -y" -- "$cur")) ;;
+            kill) COMPREPLY=($(compgen -W "-config -n -all -a -yes -y -host" -- "$cur")) ;;
+            allow) COMPREPLY=($(compgen -W "-list -revoke" -- "$cur")) ;;
+            diff) COMPREPLY=($(compgen -W "-config -format" -- "$cur")) ;;
+            wait) COMPREPLY=($(compgen -W "-timeout" -- "$cur")) ;;
+            agent) COMPREPLY=($(compgen -W "-state" -- "$cur")) ;;
+            worktree) COMPREPLY=($(compgen -W "-base -path -d" -- "$cur")) ;;
             save) COMPREPLY=($(compgen -W "-config -stdout -n -dry-run -o" -- "$cur")) ;;
             init) COMPREPLY=($(compgen -W "-config -template -t -force -f" -- "$cur")) ;;
             status) COMPREPLY=($(compgen -W "-format -session -v -watch -w -interval" -- "$cur")) ;;

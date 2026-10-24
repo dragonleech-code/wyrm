@@ -69,10 +69,15 @@ func (a *app) up(args []string) error {
 	configPath := fs.String("config", "", "path to config file (default: .wyrm.toml, then .tmuxconfig)")
 	dryRun := fs.Bool("n", false, "print the tmux commands and hooks that would run, without touching tmux")
 	detach := fs.Bool("d", false, "build the session without attaching")
+	reconcile := fs.Bool("reconcile", false, "if the session is running, add the windows the config defines that it lacks")
+	host := fs.String("host", "", "build the session on this ssh host instead of locally")
 	var vars varMapFlag
 	fs.Var(&vars, "var", "set template variable (KEY=VALUE, can be repeated)")
 	if err := parseFlags(fs, args); err != nil {
 		return err
+	}
+	if *reconcile && *dryRun {
+		return usageErrf("-reconcile and -n can't be combined: reconciling has to read the running session")
 	}
 	if fs.NArg() > 0 {
 		return usageErrf("unexpected argument %q (attach by name with `wyrm %s`, not `wyrm up %s`)",
@@ -92,8 +97,10 @@ func (a *app) up(args []string) error {
 	if err != nil {
 		return err
 	}
-	if len(vars) > 0 {
-		cfg.Interpolate(vars)
+	a.interpolate(cfg, vars)
+
+	if *host != "" {
+		return a.upRemote(settings, cfg, *host, *dryRun, *detach)
 	}
 
 	hist, err := state.Load()
@@ -103,6 +110,24 @@ func (a *app) up(args []string) error {
 
 	if *dryRun {
 		return a.dryRunBuild(cfg, hist, !*detach)
+	}
+	if err := a.ensureTrusted(settings, cfg); err != nil {
+		return err
+	}
+
+	if *reconcile {
+		name, sessionID, added, rerr := session.Reconcile(a.runner, cfg, a.stdout, a.stderr)
+		switch {
+		case rerr == nil:
+			a.reportReconciled(name, added)
+			if *detach {
+				return nil
+			}
+			return a.attachSession(settings, cfg, sessionID)
+		case !errors.Is(rerr, session.ErrSessionNotRunning):
+			return rerr
+		}
+		// Not running: nothing to reconcile, so build it the ordinary way.
 	}
 
 	name, sessionID, created, err := session.Create(a.runner, cfg, a.stdout, a.stderr, session.WithHistory(hist))
@@ -114,7 +139,29 @@ func (a *app) up(args []string) error {
 		_, _ = fmt.Fprintf(a.stdout, "run `wyrm %s` to attach\n", name)
 		return nil
 	}
-	return a.attachSession(cfg, sessionID)
+	return a.attachSession(settings, cfg, sessionID)
+}
+
+// reportReconciled says what `up -reconcile` changed.
+func (a *app) reportReconciled(name string, added []string) {
+	if len(added) == 0 {
+		_, _ = fmt.Fprintf(a.stdout, "session %s already has every configured window\n", name)
+		return
+	}
+	for _, w := range added {
+		_, _ = fmt.Fprintf(a.stdout, "added window %s to session %s\n", w, name)
+	}
+}
+
+// interpolate applies --var values to cfg and reports any deprecated
+// placeholder syntax they were substituted through.
+func (a *app) interpolate(cfg *config.Config, vars map[string]string) {
+	if len(vars) == 0 {
+		return
+	}
+	for _, w := range cfg.Interpolate(vars) {
+		_, _ = fmt.Fprintln(a.stderr, "wyrm: warning: "+w)
+	}
 }
 
 // attachSession runs on_project_attach and then hands the terminal over.
@@ -123,8 +170,18 @@ func (a *app) up(args []string) error {
 // when wyrm attaches and never when it doesn't: `up -d`, `restart -d` and
 // `restart -all` all build a session and return without attaching, and Create
 // fired the hook for all three.
-func (a *app) attachSession(cfg *config.Config, sessionID string) error {
-	_ = session.RunAttachHook(cfg, a.stderr)
+//
+// An untrusted config still attaches — attaching runs nothing of the
+// config's — but without its on_project_attach.
+func (a *app) attachSession(settings *config.Settings, cfg *config.Config, sessionID string) error {
+	switch err := a.ensureTrusted(settings, cfg); {
+	case err == nil:
+		_ = session.RunAttachHook(cfg, a.stderr)
+	case errors.Is(err, errUntrusted):
+		_, _ = fmt.Fprintf(a.stderr, "wyrm: warning: %v; attaching without on_project_attach\n", err)
+	default:
+		return err
+	}
 	return a.attachOrSwitch(sessionID)
 }
 
@@ -220,9 +277,7 @@ func (a *app) restart(args []string) error {
 	if err != nil {
 		return err
 	}
-	if len(vars) > 0 {
-		cfg.Interpolate(vars)
-	}
+	a.interpolate(cfg, vars)
 
 	hist, err := state.Load()
 	if err != nil {
@@ -246,6 +301,9 @@ func (a *app) restart(args []string) error {
 		return err
 	}
 
+	if err := a.ensureTrusted(settings, cfg); err != nil {
+		return err
+	}
 	if proceed, kerr := a.killForRestart(cfg); !proceed {
 		return fmt.Errorf("stopping the existing session: %w", kerr)
 	}
@@ -259,7 +317,7 @@ func (a *app) restart(args []string) error {
 		_, _ = fmt.Fprintf(a.stdout, "run `wyrm %s` to attach\n", name)
 		return nil
 	}
-	return a.attachSession(cfg, sessionID)
+	return a.attachSession(settings, cfg, sessionID)
 }
 
 func (a *app) restartAll(settings *config.Settings, dryRun, yes bool, vars map[string]string) error {
@@ -303,7 +361,7 @@ func (a *app) restartAll(settings *config.Settings, dryRun, yes bool, vars map[s
 				if loadErr != nil {
 					continue
 				}
-				loaded.Interpolate(vars)
+				_ = loaded.Interpolate(vars) // warnings are reported once, below
 				resolved, _, resolveErr := loaded.Session.Resolve(loaded.Dir())
 				if resolveErr == nil && (resolved == s.Name || tmux.SanitizeName(resolved) == s.Name) {
 					project, matchedCfg, found = candidate, loaded, true
@@ -324,8 +382,8 @@ func (a *app) restartAll(settings *config.Settings, dryRun, yes bool, vars map[s
 			failures = append(failures, fmt.Errorf("%s: %w", s.Name, err))
 			continue
 		}
-		if len(vars) > 0 {
-			cfg.Interpolate(vars)
+		if matchedCfg == nil {
+			a.interpolate(cfg, vars)
 		}
 
 		if dryRun {
@@ -346,6 +404,11 @@ func (a *app) restartAll(settings *config.Settings, dryRun, yes bool, vars map[s
 			continue
 		}
 
+		if err := a.ensureTrusted(settings, cfg); err != nil {
+			_, _ = fmt.Fprintf(a.stderr, "wyrm: warning: skipping session %q: %v\n", s.Name, err)
+			failures = append(failures, fmt.Errorf("%s: %w", s.Name, err))
+			continue
+		}
 		if proceed, kerr := a.killForRestart(cfg); !proceed {
 			_, _ = fmt.Fprintf(a.stderr, "wyrm: warning: skipping session %q: could not stop it: %v\n", s.Name, kerr)
 			failures = append(failures, fmt.Errorf("%s: %w", s.Name, kerr))
@@ -365,8 +428,7 @@ func (a *app) restartAll(settings *config.Settings, dryRun, yes bool, vars map[s
 
 // kill runs the on_project_exit hook and destroys the session. With a
 // positional name it targets that session instead of the current folder's,
-// mirroring `wyrm <name>` — killing by name was previously only possible from
-// the picker or the TUI.
+// mirroring `wyrm <name>`.
 func (a *app) kill(args []string) error {
 	fs := a.newFlagSet("kill")
 	configPath := fs.String("config", "", "path to config file (default: .wyrm.toml, then .tmuxconfig)")
@@ -375,6 +437,7 @@ func (a *app) kill(args []string) error {
 	allShort := fs.Bool("a", false, "alias for -all")
 	yesFlag := fs.Bool("y", false, "skip confirmation prompt when killing all sessions")
 	yesLong := fs.Bool("yes", false, "alias for -y")
+	host := fs.String("host", "", "kill the session on this ssh host (as built by up -host)")
 	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
@@ -405,6 +468,12 @@ func (a *app) kill(args []string) error {
 	// on_project_exit hook still runs when wyrm knows the config. Falling back
 	// to a plain tmux kill covers sessions wyrm didn't create.
 	if target := fs.Arg(0); target != "" {
+		if *host != "" {
+			return usageErrf("-host kills the current folder's session; it can't be combined with a session name")
+		}
+		if strings.HasPrefix(target, "@") {
+			return a.killWorkspace(settings, strings.TrimPrefix(target, "@"), *dryRun)
+		}
 		if *configPath != "" {
 			return usageErrf("-config and a session name are mutually exclusive")
 		}
@@ -415,10 +484,15 @@ func (a *app) kill(args []string) error {
 	if err != nil {
 		return err
 	}
+	if *host != "" {
+		return a.killRemote(settings, cfg, *host, *dryRun)
+	}
 
 	var opts []session.Option
 	if *dryRun {
 		opts = a.teardownDryRun()
+	} else if opts, err = a.teardownOptions(settings, cfg, opts); err != nil {
+		return err
 	}
 	name, err := session.Kill(a.runner, cfg, a.stderr, opts...)
 	if err != nil {
@@ -458,7 +532,15 @@ func (a *app) killAll(settings *config.Settings, dryRun, yes bool) error {
 	for _, s := range active {
 		if project, found := sessions.FindProject(index, s.Name); found {
 			if cfg, err := project.LoadConfig(); err == nil {
-				name, kerr := session.Kill(a.runner, cfg, a.stderr, opts...)
+				kopts := opts
+				if !dryRun {
+					var terr error
+					if kopts, terr = a.teardownOptions(settings, cfg, opts); terr != nil {
+						failures = append(failures, fmt.Errorf("%s: %w", s.Name, terr))
+						continue
+					}
+				}
+				name, kerr := session.Kill(a.runner, cfg, a.stderr, kopts...)
 				if kerr != nil {
 					_, _ = fmt.Fprintf(a.stderr, "wyrm: warning: failed to kill session %s: %v\n", s.Name, kerr)
 					failures = append(failures, fmt.Errorf("%s: %w", s.Name, kerr))
@@ -483,6 +565,15 @@ func (a *app) killAll(settings *config.Settings, dryRun, yes bool) error {
 	return errors.Join(failures...)
 }
 
+// killOptions is teardownOptions for a real kill, and opts unchanged for a dry
+// run, which runs no hooks anyway.
+func (a *app) killOptions(settings *config.Settings, cfg *config.Config, opts []session.Option, dryRun bool) ([]session.Option, error) {
+	if dryRun {
+		return opts, nil
+	}
+	return a.teardownOptions(settings, cfg, opts)
+}
+
 func (a *app) killByName(settings *config.Settings, target string, dryRun bool) error {
 	var opts []session.Option
 	if dryRun {
@@ -501,7 +592,11 @@ func (a *app) killByName(settings *config.Settings, target string, dryRun bool) 
 		if project, found := config.FindProject(settings, target); found {
 			if cfg, cerr := project.LoadConfig(); cerr == nil {
 				if name, _, rerr := cfg.Session.Resolve(cfg.Dir()); rerr == nil && name == target {
-					name, kerr := session.Kill(a.runner, cfg, a.stderr, opts...)
+					kopts, terr := a.killOptions(settings, cfg, opts, dryRun)
+					if terr != nil {
+						return terr
+					}
+					name, kerr := session.Kill(a.runner, cfg, a.stderr, kopts...)
 					if kerr != nil {
 						return kerr
 					}
@@ -531,7 +626,11 @@ func (a *app) killByName(settings *config.Settings, target string, dryRun bool) 
 	// to misidentify here, so trusting the config match is safe.
 	if project, found := config.FindProject(settings, target); found {
 		if cfg, err := project.LoadConfig(); err == nil {
-			name, kerr := session.Kill(a.runner, cfg, a.stderr, opts...)
+			kopts, terr := a.killOptions(settings, cfg, opts, dryRun)
+			if terr != nil {
+				return terr
+			}
+			name, kerr := session.Kill(a.runner, cfg, a.stderr, kopts...)
 			if kerr != nil {
 				return kerr
 			}
@@ -582,10 +681,8 @@ func (a *app) attachByName(name string, extraArgs []string) error {
 		}
 		if project, found := sessions.FindProject(config.NewProjectIndex(settings), actualName); found {
 			if cfg, err := project.LoadConfig(); err == nil {
-				if len(vars) > 0 {
-					cfg.Interpolate(vars)
-				}
-				return a.attachSession(cfg, id)
+				a.interpolate(cfg, vars)
+				return a.attachSession(settings, cfg, id)
 			}
 		}
 		return a.attachOrSwitch(id)
@@ -596,7 +693,7 @@ func (a *app) attachByName(name string, extraArgs []string) error {
 	// project's config buys nothing, because the only way to start one is still
 	// to cd into its folder first.
 	if project, found := config.FindProject(settings, name); found {
-		return a.startProject(project, vars)
+		return a.startProject(settings, project, vars)
 	}
 
 	_, _ = fmt.Fprintf(a.stderr, "wyrm: no running session or known project named %q\n", name)
@@ -608,18 +705,19 @@ func (a *app) attachByName(name string, extraArgs []string) error {
 
 // startProject builds (or reattaches) the session for a discovered config and
 // hands the terminal over.
-func (a *app) startProject(project config.Project, vars map[string]string) error {
+func (a *app) startProject(settings *config.Settings, project config.Project, vars map[string]string) error {
 	cfg, err := project.LoadConfig()
 	if err != nil {
 		return err
 	}
-	if len(vars) > 0 {
-		cfg.Interpolate(vars)
-	}
+	a.interpolate(cfg, vars)
 	_, _ = fmt.Fprintf(a.stderr, "wyrm: using config %s\n", project.Path)
 	a.printWarnings(cfg)
 	if msg, bad := config.CheckSharedRoot(project, cfg); bad {
 		_, _ = fmt.Fprintln(a.stderr, "wyrm: warning: "+msg)
+	}
+	if err := a.ensureTrusted(settings, cfg); err != nil {
+		return err
 	}
 
 	hist, err := state.Load()
@@ -632,5 +730,5 @@ func (a *app) startProject(project config.Project, vars map[string]string) error
 		return err
 	}
 	a.reportCreated(name, created)
-	return a.attachSession(cfg, sessionID)
+	return a.attachSession(settings, cfg, sessionID)
 }

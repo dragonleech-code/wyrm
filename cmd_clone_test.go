@@ -163,6 +163,7 @@ func TestCloneNoStart(t *testing.T) {
 // old behavior printed a warning naming the flag you needed *before* you ran
 // the command, and then ran the hooks anyway.
 func TestCloneConfirmsBeforeRunningHooks(t *testing.T) {
+	requireTrust(t)
 	writeHookedClone := func(t *testing.T) string {
 		t.Helper()
 		base := t.TempDir()
@@ -305,13 +306,14 @@ func TestConfigCommandsIncludesExecutablePaneTitle(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Session.EnablePaneTitles = &enabled
 	cfg.Session.PaneTitleFormat = "#(touch /tmp/owned)"
-	commands := configCommands(cfg)
+	commands := cfg.Commands()
 	if len(commands) != 1 || !strings.Contains(commands[0], "pane_title_format") {
 		t.Fatalf("commands = %v, want pane title command substitution", commands)
 	}
 }
 
 func TestClonePaneTitleCommandRequiresConfirmation(t *testing.T) {
+	requireTrust(t)
 	installFakeGit(t)
 	base := t.TempDir()
 	chdir(t, base)

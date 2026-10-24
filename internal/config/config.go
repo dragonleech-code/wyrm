@@ -3,7 +3,9 @@ package config
 
 import (
 	"bytes"
+	"crypto/sha256"
 	_ "embed"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -11,7 +13,9 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/jskoll/wyrm/internal/wait"
 	"github.com/pelletier/go-toml/v2"
 )
 
@@ -29,6 +33,9 @@ var defaultConfigData []byte
 
 // Config is the root of a wyrm config file.
 type Config struct {
+	// Extends names a base config this one builds on, resolved against this
+	// file's directory. See mergeBase for how the two combine.
+	Extends string   `toml:"extends,omitempty"`
 	Session Session  `toml:"session"`
 	Windows []Window `toml:"windows"`
 
@@ -39,6 +46,14 @@ type Config struct {
 	// default), which falls back to the working directory.
 	dir string
 
+	// path is the absolute path of the file this config was loaded from, and
+	// sources every file that contributed to it: path first, then each config
+	// it extends. digest fingerprints their contents as read, so a trust
+	// decision covers exactly the bytes that will run — see Fingerprint.
+	path    string
+	sources []string
+	digest  string
+
 	// warnings are non-fatal problems found while validating: things that will
 	// build, but not the way the config's author probably meant. Callers print
 	// them; they never stop a session being created.
@@ -48,6 +63,19 @@ type Config struct {
 // Dir returns the directory this config was loaded from, or "" for a config
 // that didn't come from a file.
 func (c *Config) Dir() string { return c.dir }
+
+// Path returns the absolute path of the file this config was loaded from, or
+// "" for a config that didn't come from a file.
+func (c *Config) Path() string { return c.path }
+
+// Sources returns every file that contributed to this config: its own path,
+// then each base it extends, nearest first.
+func (c *Config) Sources() []string { return c.sources }
+
+// Fingerprint is a SHA-256 over the path and content of every source file, as
+// read when the config was loaded. It changes whenever any file in the extends
+// chain does, so trusting a fingerprint trusts the whole chain.
+func (c *Config) Fingerprint() string { return c.digest }
 
 // Warnings returns non-fatal problems found while validating the config.
 func (c *Config) Warnings() []string { return c.warnings }
@@ -68,11 +96,14 @@ type Session struct {
 	// genuine first-ever start from a later one. Which fires is decided by
 	// session.HookHistory, threaded in from outside this package: Create has
 	// no way to tell the two apart on its own without it.
-	OnProjectFirstStart string            `toml:"on_project_first_start,omitempty"`
-	OnProjectRestart    string            `toml:"on_project_restart,omitempty"`
-	StartupWindow       string            `toml:"startup_window,omitempty"`
-	StartupPane         *int              `toml:"startup_pane,omitempty"` // nil = unset; 0 is a valid pane
-	Env                 map[string]string `toml:"env,omitempty"`
+	OnProjectFirstStart string `toml:"on_project_first_start,omitempty"`
+	OnProjectRestart    string `toml:"on_project_restart,omitempty"`
+	// HookTimeout bounds every lifecycle hook and post_window command, as a Go
+	// duration ("90s", "5m"). Empty means no limit.
+	HookTimeout   string            `toml:"hook_timeout,omitempty"`
+	StartupWindow string            `toml:"startup_window,omitempty"`
+	StartupPane   *int              `toml:"startup_pane,omitempty"` // nil = unset; 0 is a valid pane
+	Env           map[string]string `toml:"env,omitempty"`
 	// Aliases are additional exact-match names FindProject resolves this
 	// project by, alongside its normal session name — a short, fixed name
 	// that doesn't shift as other projects come and go. Matched only for
@@ -101,9 +132,8 @@ type Window struct {
 	// the session root, so a monorepo can say root = "api" and get a window
 	// rooted there. Empty means the session root.
 	//
-	// Before this existed the only way to express it was pre_window = "cd api",
-	// which types a visible cd into every pane of the window and races that
-	// pane's own command.
+	// Prefer it to pre_window = "cd api", which types a visible cd into every
+	// pane of the window and races that pane's own command.
 	Root      string            `toml:"root,omitempty"`
 	Env       map[string]string `toml:"env,omitempty"`
 	Splits    []Split           `toml:"splits,omitempty"`
@@ -140,6 +170,13 @@ type Split struct {
 	// shell history, and a command starting with "#" is runnable (Command treats
 	// those as comments).
 	Run string `toml:"run,omitempty"`
+	// WaitFor delays this pane's command or run until a dependency is ready:
+	// "tcp:HOST:PORT", "file:PATH", or an http(s) URL. The pane itself is
+	// created immediately; only the command waits, via `wyrm wait`.
+	WaitFor string `toml:"wait_for,omitempty"`
+	// WaitTimeout bounds WaitFor, as a Go duration. Empty means
+	// wait.DefaultTimeout. The command does not run if the wait times out.
+	WaitTimeout string `toml:"wait_timeout,omitempty"`
 	// Root overrides the window's directory for this pane and, unless they
 	// override it themselves, its children.
 	Root     string            `toml:"root,omitempty"`
@@ -168,7 +205,8 @@ func Discover() (string, error) {
 // DiscoverIn searches for a config file starting at startDir. If upward is true,
 // it walks upward through parent directories until it finds a config, reaches
 // a git repository boundary (.git), reaches the user home directory, or hits the
-// filesystem root.
+// filesystem root. A config found on the way that another user could have
+// written is an error, not a match — see checkDiscoverable.
 func DiscoverIn(startDir string, upward bool) (string, error) {
 	dir := startDir
 	if dir == "" || dir == "." {
@@ -193,6 +231,9 @@ func DiscoverIn(startDir string, upward bool) (string, error) {
 		for _, name := range []string{DefaultFileName, LegacyFileName} {
 			target := filepath.Join(current, name)
 			if _, err := os.Stat(target); err == nil {
+				if err := checkDiscoverable(current, target); err != nil {
+					return "", err
+				}
 				if current == absDir {
 					return name, nil
 				}
@@ -229,23 +270,21 @@ func isGitRoot(dir string) bool {
 
 // Load reads, parses, and validates a config file.
 func Load(path string) (*Config, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	cfg, unknown, err := decode(data)
-	if err != nil {
-		return nil, fmt.Errorf("parsing %s: %w", path, err)
-	}
 	// Not a silent fallback: cfg.dir is what a relative session.root resolves
 	// against, so losing it doesn't degrade gracefully — it quietly roots the
-	// session wherever the process happens to be standing, which is the bug
-	// Config.dir exists to prevent.
+	// session wherever the process happens to be standing.
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return nil, fmt.Errorf("resolving %s: %w", path, err)
 	}
+	hash := sha256.New()
+	cfg, unknown, err := loadChain(abs, hash, nil)
+	if err != nil {
+		return nil, err
+	}
 	cfg.dir = filepath.Dir(abs)
+	cfg.path = abs
+	cfg.digest = hex.EncodeToString(hash.Sum(nil))
 	if err := cfg.validate(); err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
@@ -341,6 +380,9 @@ func (c *Config) validate() error {
 	if err := validateEnv("session.env", c.Session.Env); err != nil {
 		return err
 	}
+	if _, err := c.Session.HookTimeoutDuration(); err != nil {
+		return err
+	}
 	for _, w := range c.Windows {
 		if err := validateEnv(fmt.Sprintf("window %q env", w.Name), w.Env); err != nil {
 			return err
@@ -390,6 +432,98 @@ func windowWarnings(w Window) []string {
 		out = append(out, fmt.Sprintf(
 			"window %q: the first split sets type=%q, so it splits the window's initial pane and leaves it empty — drop the type to put this entry in the initial pane", name, w.Splits[0].Type))
 	}
+	if w.SynchronizePanes != nil {
+		out = append(out, fmt.Sprintf(
+			"window %q: synchronize_panes is a deprecated alias and will be removed in 1.0; use synchronize", name))
+	}
+	out = append(out, splitWarnings(name, w.Splits)...)
+	return out
+}
+
+// splitWarnings reports deprecated or ineffective keys anywhere in a split tree.
+func splitWarnings(window string, splits []Split) []string {
+	var out []string
+	for i, s := range splits {
+		if s.Zoom != nil {
+			out = append(out, fmt.Sprintf(
+				"window %q split %d: zoom is a deprecated alias and will be removed in 1.0; use zoomed", window, i))
+		}
+		if s.WaitFor != "" && s.Command == "" && s.Run == "" {
+			out = append(out, fmt.Sprintf(
+				"window %q split %d: wait_for has no command or run to delay, so it does nothing", window, i))
+		}
+		out = append(out, splitWarnings(window, s.Children)...)
+	}
+	return out
+}
+
+// HookTimeoutDuration parses hook_timeout. Zero means no limit.
+func (s Session) HookTimeoutDuration() (time.Duration, error) {
+	return parseDuration("session.hook_timeout", s.HookTimeout)
+}
+
+// WaitTimeoutDuration parses wait_timeout. Zero means wait.DefaultTimeout.
+func (s Split) WaitTimeoutDuration() (time.Duration, error) {
+	return parseDuration("wait_timeout", s.WaitTimeout)
+}
+
+func parseDuration(key, v string) (time.Duration, error) {
+	if v == "" {
+		return 0, nil
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return 0, fmt.Errorf("%s: %q is not a duration (try \"90s\" or \"5m\")", key, v)
+	}
+	if d < 0 {
+		return 0, fmt.Errorf("%s: %q must not be negative", key, v)
+	}
+	return d, nil
+}
+
+// Commands lists every piece of shell this config would execute, labelled by
+// where it comes from. Hooks run as subprocesses and pane commands are typed
+// into a shell; both execute, so both are listed. A config with none needs no
+// trust decision — see internal/trust.
+func (c *Config) Commands() []string {
+	var out []string
+	add := func(label, cmd string) {
+		if cmd != "" {
+			out = append(out, label+" = "+cmd)
+		}
+	}
+	add("on_project_start", c.Session.OnProjectStart)
+	add("on_project_first_start", c.Session.OnProjectFirstStart)
+	add("on_project_restart", c.Session.OnProjectRestart)
+	add("on_project_attach", c.Session.OnProjectAttach)
+	add("on_project_exit", c.Session.OnProjectExit)
+	add("on_project_detach", c.Session.OnProjectDetach)
+	if c.Session.EnablePaneTitles != nil && *c.Session.EnablePaneTitles && strings.Contains(c.Session.PaneTitleFormat, "#(") {
+		add("pane_title_format (tmux command substitution)", c.Session.PaneTitleFormat)
+	}
+	for _, w := range c.Windows {
+		where := "window " + w.Name
+		add(where+" pre_window", w.PreWindow)
+		add(where+" post_window", w.PostWindow)
+		out = append(out, splitCommands(where, w.Splits)...)
+		for _, p := range w.Panes {
+			add(where+" pane", p.Command)
+		}
+	}
+	return out
+}
+
+func splitCommands(where string, splits []Split) []string {
+	var out []string
+	for _, s := range splits {
+		if s.Command != "" {
+			out = append(out, where+" command = "+s.Command)
+		}
+		if s.Run != "" {
+			out = append(out, where+" run = "+s.Run)
+		}
+		out = append(out, splitCommands(where, s.Children)...)
+	}
 	return out
 }
 
@@ -412,6 +546,14 @@ func validateSplits(window string, splits []Split) error {
 		// either would surprise half the people who wrote both.
 		if s.Command != "" && s.Run != "" {
 			return fmt.Errorf("window %q split %d: set command or run, not both (command types into a shell; run replaces it)", window, i)
+		}
+		if s.WaitFor != "" {
+			if _, err := wait.Parse(s.WaitFor); err != nil {
+				return fmt.Errorf("window %q split %d: %w", window, i, err)
+			}
+		}
+		if _, err := s.WaitTimeoutDuration(); err != nil {
+			return fmt.Errorf("window %q split %d: %w", window, i, err)
 		}
 		if err := validateSplits(window, s.Children); err != nil {
 			return err
@@ -556,27 +698,33 @@ func ExpandTilde(p string) (string, error) {
 
 // Interpolate replaces template placeholders in the config with values from vars,
 // and merges vars into session.env so child shells and hooks also receive them.
-// Supported placeholders: {{.var}}, {{var}}, {{.var.name}}, {{var.name}}, ${var}, and $var.
-func (c *Config) Interpolate(vars map[string]string) {
+//
+// {{name}} is the placeholder. {{.name}}, {{var.name}}, {{.var.name}},
+// ${name} and bare $name still substitute, but are deprecated and reported in
+// the returned warnings: the last two collide with the shell's own variables,
+// so a hook mentioning $HOME was rewritten whenever a --var happened to be
+// called HOME. They are removed in 1.0.
+func (c *Config) Interpolate(vars map[string]string) []string {
 	if c == nil || len(vars) == 0 {
-		return
+		return nil
 	}
-	c.Session.Name = InterpolateString(c.Session.Name, vars)
-	c.Session.Root = InterpolateString(c.Session.Root, vars)
-	c.Session.OnProjectStart = InterpolateString(c.Session.OnProjectStart, vars)
-	c.Session.OnProjectExit = InterpolateString(c.Session.OnProjectExit, vars)
-	c.Session.OnProjectAttach = InterpolateString(c.Session.OnProjectAttach, vars)
-	c.Session.OnProjectDetach = InterpolateString(c.Session.OnProjectDetach, vars)
-	c.Session.OnProjectFirstStart = InterpolateString(c.Session.OnProjectFirstStart, vars)
-	c.Session.OnProjectRestart = InterpolateString(c.Session.OnProjectRestart, vars)
-	c.Session.StartupWindow = InterpolateString(c.Session.StartupWindow, vars)
-	c.Session.PaneTitleFormat = InterpolateString(c.Session.PaneTitleFormat, vars)
+	ip := &interpolator{vars: vars}
+	c.Session.Name = ip.str(c.Session.Name)
+	c.Session.Root = ip.str(c.Session.Root)
+	c.Session.OnProjectStart = ip.str(c.Session.OnProjectStart)
+	c.Session.OnProjectExit = ip.str(c.Session.OnProjectExit)
+	c.Session.OnProjectAttach = ip.str(c.Session.OnProjectAttach)
+	c.Session.OnProjectDetach = ip.str(c.Session.OnProjectDetach)
+	c.Session.OnProjectFirstStart = ip.str(c.Session.OnProjectFirstStart)
+	c.Session.OnProjectRestart = ip.str(c.Session.OnProjectRestart)
+	c.Session.StartupWindow = ip.str(c.Session.StartupWindow)
+	c.Session.PaneTitleFormat = ip.str(c.Session.PaneTitleFormat)
 
 	if c.Session.Env == nil {
 		c.Session.Env = make(map[string]string)
 	}
 	for k, v := range c.Session.Env {
-		c.Session.Env[k] = InterpolateString(v, vars)
+		c.Session.Env[k] = ip.str(v)
 	}
 	for k, v := range vars {
 		if _, exists := c.Session.Env[k]; !exists {
@@ -585,45 +733,80 @@ func (c *Config) Interpolate(vars map[string]string) {
 	}
 
 	for i := range c.Windows {
-		c.Windows[i].Name = InterpolateString(c.Windows[i].Name, vars)
-		c.Windows[i].Root = InterpolateString(c.Windows[i].Root, vars)
-		c.Windows[i].PreWindow = InterpolateString(c.Windows[i].PreWindow, vars)
-		c.Windows[i].PostWindow = InterpolateString(c.Windows[i].PostWindow, vars)
+		c.Windows[i].Name = ip.str(c.Windows[i].Name)
+		c.Windows[i].Root = ip.str(c.Windows[i].Root)
+		c.Windows[i].PreWindow = ip.str(c.Windows[i].PreWindow)
+		c.Windows[i].PostWindow = ip.str(c.Windows[i].PostWindow)
 		for k, v := range c.Windows[i].Env {
-			c.Windows[i].Env[k] = InterpolateString(v, vars)
+			c.Windows[i].Env[k] = ip.str(v)
 		}
-		interpolateSplits(c.Windows[i].Splits, vars)
+		ip.splits(c.Windows[i].Splits)
 		for j := range c.Windows[i].Panes {
-			c.Windows[i].Panes[j].Command = InterpolateString(c.Windows[i].Panes[j].Command, vars)
+			c.Windows[i].Panes[j].Command = ip.str(c.Windows[i].Panes[j].Command)
 		}
 	}
+	return ip.warnings()
 }
 
-func interpolateSplits(splits []Split, vars map[string]string) {
+func (ip *interpolator) splits(splits []Split) {
 	for i := range splits {
-		splits[i].Command = InterpolateString(splits[i].Command, vars)
-		splits[i].Run = InterpolateString(splits[i].Run, vars)
-		splits[i].Root = InterpolateString(splits[i].Root, vars)
+		splits[i].Command = ip.str(splits[i].Command)
+		splits[i].Run = ip.str(splits[i].Run)
+		splits[i].Root = ip.str(splits[i].Root)
 		for k, v := range splits[i].Env {
-			splits[i].Env[k] = InterpolateString(v, vars)
+			splits[i].Env[k] = ip.str(v)
 		}
-		interpolateSplits(splits[i].Children, vars)
+		ip.splits(splits[i].Children)
 	}
 }
 
-// InterpolateString performs deterministic, boundary-safe template variable substitution.
-// It supports {{.var}}, {{var}}, {{.var.name}}, {{var.name}}, ${var}, and bare $var identifiers.
+// InterpolateString performs deterministic, boundary-safe template variable
+// substitution, accepting every placeholder form Interpolate does.
 func InterpolateString(s string, vars map[string]string) string {
-	if s == "" || len(vars) == 0 {
+	return (&interpolator{vars: vars}).str(s)
+}
+
+// interpolator substitutes vars and remembers which deprecated placeholder
+// forms it substituted through.
+type interpolator struct {
+	vars map[string]string
+	used map[string]bool
+}
+
+func (ip *interpolator) warnings() []string {
+	forms := make([]string, 0, len(ip.used))
+	for f := range ip.used {
+		forms = append(forms, f)
+	}
+	sort.Strings(forms)
+	out := make([]string, 0, len(forms))
+	for _, f := range forms {
+		out = append(out, fmt.Sprintf("placeholder %s is deprecated and will be removed in 1.0; write {{name}}", f))
+	}
+	return out
+}
+
+func (ip *interpolator) note(form, before, after string) {
+	if before == after {
+		return
+	}
+	if ip.used == nil {
+		ip.used = map[string]bool{}
+	}
+	ip.used[form] = true
+}
+
+// str substitutes every var in s. Keys are applied longest first, then
+// alphabetically, so the result is deterministic and a longer name is never
+// clobbered by a shorter prefix of it.
+func (ip *interpolator) str(s string) string {
+	if s == "" || len(ip.vars) == 0 {
 		return s
 	}
-
-	keys := make([]string, 0, len(vars))
-	for k := range vars {
+	keys := make([]string, 0, len(ip.vars))
+	for k := range ip.vars {
 		keys = append(keys, k)
 	}
-	// Sort keys by descending length first, then alphabetically, ensuring deterministic substitution
-	// and that longer prefixes are replaced before shorter substrings.
 	sort.Slice(keys, func(i, j int) bool {
 		if len(keys[i]) != len(keys[j]) {
 			return len(keys[i]) > len(keys[j])
@@ -633,13 +816,23 @@ func InterpolateString(s string, vars map[string]string) string {
 
 	res := s
 	for _, k := range keys {
-		v := vars[k]
-		res = strings.ReplaceAll(res, "{{.var."+k+"}}", v)
-		res = strings.ReplaceAll(res, "{{var."+k+"}}", v)
-		res = strings.ReplaceAll(res, "{{."+k+"}}", v)
+		v := ip.vars[k]
+		for _, form := range []struct{ placeholder, shown string }{
+			{"{{.var." + k + "}}", "{{.var.name}}"},
+			{"{{var." + k + "}}", "{{var.name}}"},
+			{"{{." + k + "}}", "{{.name}}"},
+		} {
+			next := strings.ReplaceAll(res, form.placeholder, v)
+			ip.note(form.shown, res, next)
+			res = next
+		}
 		res = strings.ReplaceAll(res, "{{"+k+"}}", v)
-		res = strings.ReplaceAll(res, "${"+k+"}", v)
-		res = replaceBareVar(res, k, v)
+		next := strings.ReplaceAll(res, "${"+k+"}", v)
+		ip.note("${name}", res, next)
+		res = next
+		next = replaceBareVar(res, k, v)
+		ip.note("$name", res, next)
+		res = next
 	}
 	return res
 }

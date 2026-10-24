@@ -289,3 +289,24 @@ func TestBuildCustomNotifyCommand_SafeEnvironmentVariables(t *testing.T) {
 		t.Errorf("Missing expected environment variables in cmd.Env: %v", cmd.Env)
 	}
 }
+
+func TestSanitizeTerminalStringStripsC1(t *testing.T) {
+	in := "ok\u009b31m\u009dtitle\x1b[0m\xffend"
+	if got := SanitizeTerminalString(in); got != "ok31mtitle[0mend" {
+		t.Errorf("got %q", got)
+	}
+	if got := SanitizeTerminalString("héllo ⏸"); got != "héllo ⏸" {
+		t.Errorf("printable non-ASCII altered: %q", got)
+	}
+}
+
+func TestBuildMacNotifyCommandPassesTextAsArguments(t *testing.T) {
+	cmd := BuildMacNotifyCommand(`a "quoted" title`, "-e do shell script \"id\"")
+	args := cmd.Args
+	if len(args) != 5 || args[1] != "-e" || !strings.Contains(args[2], "item 1 of argv") {
+		t.Fatalf("args = %q", args)
+	}
+	if args[3] != ` -e do shell script "id"` || args[4] != `a "quoted" title` {
+		t.Errorf("message/title not passed verbatim as data: %q", args[3:])
+	}
+}
