@@ -202,8 +202,13 @@ const (
 	lockStaleAfter = 30 * time.Second
 )
 
-// lockFile takes an exclusive lock for path via an O_EXCL sibling file, and
-// returns the function that releases it.
+// LockFile takes an exclusive lock for path via an O_EXCL sibling file, and
+// returns the function that releases it. Other small wyrm files (the trust
+// store) share it, so every one of them is serialized the same way.
+func LockFile(path string) (func(), error) {
+	return lockFile(path)
+}
+
 func lockFile(path string) (func(), error) {
 	return lockFileWithTimeout(path, lockTimeout)
 }
@@ -268,10 +273,9 @@ func AtomicWriteFile(path string, data []byte, mode os.FileMode) error {
 		return fmt.Errorf("writing to %s: %w", tmpPath, err)
 	}
 	// Sync before the rename, or the rename can be durable while the bytes it
-	// points at are not: a crash then leaves a zero-length file where a valid
-	// one used to be. The rename alone only ever bought atomicity against
-	// concurrent readers, never crash safety, though this function's name and
-	// the commit that introduced it both claimed otherwise.
+	// points at are not: a crash then leaves a zero-length file in place of
+	// the valid one. The rename alone gives atomicity against concurrent
+	// readers, not crash safety.
 	if err := tmp.Sync(); err != nil {
 		_ = tmp.Close()
 		return fmt.Errorf("syncing %s: %w", tmpPath, err)
