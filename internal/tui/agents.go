@@ -1,6 +1,9 @@
 package tui
 
 import (
+	"fmt"
+	"sort"
+
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/jskoll/wyrm/internal/agent"
@@ -87,9 +90,7 @@ func agentProfiles(settings *config.Settings) ([]agent.Profile, error) {
 // one.
 //
 // agent.State.NeedsUser is the single definition of which states earn a marker;
-// this only chooses the glyph. The two used to be stated separately — a
-// predicate in the domain package and a switch here — which is two places to
-// remember when a state is added.
+// this only chooses the glyph.
 func agentMark(state agent.State) (span, bool) {
 	if !state.NeedsUser() {
 		return span{}, false
@@ -107,3 +108,81 @@ const (
 	blockedGlyph = "⏸"
 	idleGlyph    = "✓"
 )
+
+// blocked returns every pane the last scan found blocked, in session, window,
+// pane order, so jumping through them visits them the way the panels list
+// them.
+func (a agentStatus) blocked() []tmux.PaneRef {
+	var out []tmux.PaneRef
+	for id, state := range a.panes {
+		if state == agent.StateBlocked {
+			if ref, ok := a.refs[id]; ok {
+				out = append(out, ref)
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		x, y := out[i], out[j]
+		if x.SessionName != y.SessionName {
+			return x.SessionName < y.SessionName
+		}
+		if x.WindowIndex != y.WindowIndex {
+			return x.WindowIndex < y.WindowIndex
+		}
+		return x.PaneIndex < y.PaneIndex
+	})
+	return out
+}
+
+// jumpToBlockedAgent attaches to the next blocked agent after the selected
+// pane, wrapping — the TUI's counterpart of `wyrm agent next`.
+func (m Model) jumpToBlockedAgent() (tea.Model, tea.Cmd) {
+	blocked := m.agents.blocked()
+	if len(blocked) == 0 {
+		m.info = "no agents are waiting on a prompt"
+		return m, nil
+	}
+	next := blocked[0]
+	if p, ok := m.currentPane(); ok {
+		for i, ref := range blocked {
+			if ref.PaneID == p.ID {
+				next = blocked[(i+1)%len(blocked)]
+				break
+			}
+		}
+	}
+	m.pendingAttach = next.SessionID
+	return m, tea.Sequence(selectTargetCmd(m.runner, next.WindowID, next.PaneID), tea.Quit)
+}
+
+// startApproveAgent asks before answering the selected pane's prompt. Only a
+// pane the scan saw blocked qualifies: sending Enter to anything else is just
+// typing into it.
+func (m Model) startApproveAgent() (tea.Model, tea.Cmd) {
+	p, ok := m.currentPane()
+	if !ok {
+		return m, nil
+	}
+	if m.agents.pane(p.ID) != agent.StateBlocked {
+		m.info = p.ID + " isn't waiting on a prompt"
+		return m, nil
+	}
+	m.pending = pendingAction{op: opApproveAgent, paneID: p.ID, command: p.Command}
+	m.confirmPrompt = fmt.Sprintf("Approve the prompt in %s (%s)?  (y/n)", p.ID, p.Command)
+	m.mode = modeConfirm
+	return m, nil
+}
+
+// agentApprovedMsg reports a sent approval, so Update can say so and rescan.
+type agentApprovedMsg struct{ paneID string }
+
+func approveAgentCmd(r tmux.Runner, paneID string, keys []string) tea.Cmd {
+	return func() tea.Msg {
+		for _, key := range keys {
+			if out, err := r.Run("send-keys", "-t", paneID, key); err != nil {
+				return actionErrMsg{fmt.Errorf("approving %s: %w", paneID, tmux.CmdErr(err, out))}
+			}
+		}
+		return agentApprovedMsg{paneID: paneID}
+	}
+}

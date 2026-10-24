@@ -133,9 +133,8 @@ type Model struct {
 	//
 	// The four lists above stay separately typed — they hold genuinely
 	// different things — but the cursors are four ints with identical
-	// semantics, and holding them apart meant every question about "the
-	// selection" became a switch. Two of those switches (cursorFor and
-	// focusedCursor) were the same switch written twice.
+	// semantics, so one array means a question about "the selection" never
+	// needs a switch over panels.
 	//
 	// -1 means "not chosen yet": the first load of a panel then snaps to
 	// whatever tmux says is active rather than to row 0.
@@ -687,7 +686,9 @@ func (m Model) setFocus(p panel) Model {
 // --- update ---
 
 // Update is the pure reducer. It never touches tmux or stdio directly; it only
-// folds incoming messages into new state and returns follow-up commands.
+// folds incoming messages into new state and returns follow-up commands. Each
+// message with more than a line or two of handling has its own handle* method
+// below, so this stays a table of what arrives and where it goes.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case searchEntriesMsg:
@@ -700,7 +701,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = msg.Width, msg.Height
 		m.ready = true
 		return m, nil
-
 	case tea.KeyMsg:
 		return m.handleKey(msg)
 	case clipboardMsg:
@@ -709,238 +709,278 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case notificationErrorMsg:
 		m.err = msg.err
 		return m, nil
-
 	case tea.MouseMsg:
 		return m.handleMouse(msg)
-
 	case agentStatusMsg:
-		// A failed scan keeps the previous markers rather than clearing them or
-		// claiming the footer: this is an optional decoration polled on a timer,
-		// and one unlucky tmux call shouldn't wipe an error the user is reading.
-		if msg.err != nil {
-			return m, nil
-		}
-		notifyCmds := m.agentTransitionCommands(msg.status)
-		m.prevPaneStates = make(map[string]agent.State, len(msg.status.panes))
-		for k, v := range msg.status.panes {
-			m.prevPaneStates[k] = v
-		}
-		m.agents = msg.status
-		if len(notifyCmds) > 0 {
-			return m, tea.Batch(notifyCmds...)
-		}
-		return m, nil
-
+		return m.handleAgentStatus(msg)
 	case pagerMsg:
-		if msg.err != nil {
-			m.err = msg.err
-			return m, nil
-		}
-		m.pagerPaneID = msg.paneID
-		m.pagerPaneTitle = msg.title
-		m.pagerContent = msg.content
-		m.pagerLines = strings.Split(msg.content, "\n")
-		m.pagerSearching = false
-		m.pagerQuery = ""
-		m.pagerMatches = nil
-		m.pagerMatchIdx = 0
-		pageH := m.pagerBodyHeight()
-		m.pagerScroll = len(m.pagerLines) - pageH
-		if m.pagerScroll < 0 {
-			m.pagerScroll = 0
-		}
-		m.mode = modePager
-		return m, nil
-
+		return m.handlePagerContent(msg)
 	case tea.FocusMsg:
 		// Terminal focus came back: refresh immediately rather than making the
 		// user wait out the rest of a tick for a stale screen.
 		m.blurred = false
 		return m, tea.Batch(append(m.refreshLists(), m.reloadPreview())...)
-
 	case tea.BlurMsg:
 		m.blurred = true
 		return m, nil
-
 	case tickMsg:
-		// Refresh the live pane preview, then reschedule. A config preview is
-		// static, so leave it alone — keyed off what's actually being shown
-		// rather than off which panel has focus.
-		//
-		// The ticker keeps running while the terminal is unfocused but does no
-		// work: a session manager sitting in a background tab was spending a
-		// capture-pane every second and a list sweep every three, forever, for a
-		// screen nobody was looking at.
-		var cmd tea.Cmd
-		if !m.blurred && m.previewSrc == previewPane {
-			cmd = m.reloadPreview()
-		}
-		return m, tea.Batch(cmd, tick())
-
+		return m.handleTick(msg)
 	case listTickMsg:
-		// Re-read the lists so sessions started or ended elsewhere show up.
-		// Held off while a modal is open, so the data under a confirm prompt
-		// can't change between reading it and answering it.
-		if m.blurred || (m.mode != modeNormal && m.mode != modeFilter) {
-			return m, listTick()
-		}
-		return m, tea.Batch(append(m.refreshLists(), listTick())...)
-
+		return m.handleListTick(msg)
 	case projectsMsg:
-		if msg.err != nil {
-			m.err = msg.err
-			return m, nil
-		}
-		m.projects = msg.projects
-		m.cur[panelProjects] = clamp(m.cur[panelProjects], m.panelLen(panelProjects))
-		if msg.warnings != "" {
-			// A non-fatal hook warning from whatever triggered this reload
-			// (e.g. killProjectCmd's on_project_exit) — visible, but must not
-			// block the list refresh above the way a real err does.
-			m.err = errors.New(msg.warnings)
-		}
-		if m.focus == panelProjects {
-			return m, m.updatePreview()
-		}
-		return m, nil
-
+		return m.handleProjects(msg)
 	case listsMsg:
-		if msg.err != nil {
-			m.err = msg.err
-			return m, nil
-		}
-		updated, projectCmd := m.Update(projectsMsg{projects: msg.projects})
-		m = updated.(Model)
-		updated, sessionCmd := m.Update(sessionsMsg{sessions: msg.sessions})
-		m = updated.(Model)
-		return m, tea.Batch(projectCmd, sessionCmd)
-
+		return m.handleLists(msg)
 	case configPreviewMsg:
-		if m.previewSrc != previewConfig {
-			return m, nil
-		}
-		if p, ok := m.currentProject(); !ok || p.Path != msg.path {
-			return m, nil
-		}
-		if msg.err != nil {
-			m.preview = msg.err.Error()
-			return m, nil
-		}
-		m.preview = msg.content
-		return m, nil
-
+		return m.handleConfigPreview(msg)
 	case projectStartedMsg:
-		if msg.err != nil {
-			m.err = msg.err
-			return m, nil
-		}
-		m.pendingAttach = msg.sessionID
-		if msg.warnings != "" {
-			// A non-fatal build/attach-hook warning — visible via
-			// runProgram's post-quit report, but must not block the attach
-			// this message is already committed to.
-			m.err = errors.New(msg.warnings)
-		}
-		return m, tea.Quit
-
+		return m.handleProjectStarted(msg)
 	case sessionsMsg:
-		if msg.err != nil {
-			m.err = msg.err
-			return m, nil
-		}
-		m.err = nil
-		// Capture the selected session's identity before the list underneath
-		// it is replaced outright: a periodic refresh can add, remove, or
-		// reorder sessions with no input from the user, and a bare index
-		// would then silently select whichever session ends up in that slot
-		// instead of the one actually selected — see rebaseFilteredCursor.
-		prevName := ""
-		if e, ok := m.currentSessionEntry(); ok {
-			prevName = e.Name
-		}
-		m.sessions = msg.sessions
-		m.cur[panelSessions] = clamp(m.cur[panelSessions], m.panelLen(panelSessions))
-		if prevName != "" {
-			if i := indexOfSession(m.visibleSessions(), prevName); i >= 0 {
-				m.cur[panelSessions] = i
-			}
-		}
-		return m, m.reloadWindows()
-
+		return m.handleSessions(msg)
 	case windowsMsg:
-		// Ignore a stale response for a session we've since moved off of.
-		if s, ok := m.currentSession(); !ok || s.ID != msg.sessionID {
-			return m, nil
-		}
-		if msg.err != nil {
-			m.err = msg.err
-			return m, nil
-		}
-		prevID := ""
-		if w, ok := m.currentWindow(); ok {
-			prevID = w.ID
-		}
-		m.windows = msg.windows
-		m.cur[panelWindows] = activeOrClamp(m.cur[panelWindows], m.visibleWindows())
-		if prevID != "" {
-			if i := indexOfWindow(m.visibleWindows(), prevID); i >= 0 {
-				m.cur[panelWindows] = i
-			}
-		}
-		return m, m.reloadPanes()
-
+		return m.handleWindows(msg)
 	case panesMsg:
-		if w, ok := m.currentWindow(); !ok || w.ID != msg.windowID {
-			return m, nil
-		}
-		if msg.err != nil {
-			m.err = msg.err
-			return m, nil
-		}
-		prevID := ""
-		if p, ok := m.currentPane(); ok {
-			prevID = p.ID
-		}
-		m.panes = msg.panes
-		m.cur[panelPanes] = activePaneOrClamp(m.cur[panelPanes], m.visiblePanes())
-		if prevID != "" {
-			if i := indexOfPane(m.visiblePanes(), prevID); i >= 0 {
-				m.cur[panelPanes] = i
-			}
-		}
-		return m, m.reloadPreview()
-
+		return m.handlePanes(msg)
 	case allPanesMsg:
-		if msg.err != nil {
-			m.err = msg.err
-			return m, nil
-		}
-		m.allPanes = msg.panes
-		m.findPaneCur = clamp(m.findPaneCur, len(m.visibleAllPanes()))
-		return m, nil
-
+		return m.handleAllPanes(msg)
 	case previewMsg:
-		if m.previewSrc != previewPane {
-			return m, nil
-		}
-		if p, ok := m.currentPane(); !ok || p.ID != msg.paneID {
-			return m, nil
-		}
-		if msg.err != nil {
-			m.preview = msg.err.Error()
-			return m, nil
-		}
-		m.preview = msg.content
-		if p, ok := m.currentPane(); ok {
-			m.previewTitle = p.ID + " " + p.Command
-		}
-		return m, nil
-
+		return m.handlePreview(msg)
 	case actionErrMsg:
 		m.err = msg.err
 		return m, nil
+	case agentApprovedMsg:
+		m.info = "approved " + msg.paneID
+		return m, m.agentCmd()
+	case trustNeededMsg:
+		return m.handleTrustNeeded(msg)
 	}
 
+	return m, nil
+}
+
+func (m Model) handleAgentStatus(msg agentStatusMsg) (tea.Model, tea.Cmd) {
+	// A failed scan keeps the previous markers rather than clearing them or
+	// claiming the footer: this is an optional decoration polled on a timer,
+	// and one unlucky tmux call shouldn't wipe an error the user is reading.
+	if msg.err != nil {
+		return m, nil
+	}
+	notifyCmds := m.agentTransitionCommands(msg.status)
+	m.prevPaneStates = make(map[string]agent.State, len(msg.status.panes))
+	for k, v := range msg.status.panes {
+		m.prevPaneStates[k] = v
+	}
+	m.agents = msg.status
+	if len(notifyCmds) > 0 {
+		return m, tea.Batch(notifyCmds...)
+	}
+	return m, nil
+}
+
+func (m Model) handlePagerContent(msg pagerMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		m.err = msg.err
+		return m, nil
+	}
+	m.pagerPaneID = msg.paneID
+	m.pagerPaneTitle = msg.title
+	m.pagerContent = msg.content
+	m.pagerLines = strings.Split(msg.content, "\n")
+	m.pagerSearching = false
+	m.pagerQuery = ""
+	m.pagerMatches = nil
+	m.pagerMatchIdx = 0
+	pageH := m.pagerBodyHeight()
+	m.pagerScroll = len(m.pagerLines) - pageH
+	if m.pagerScroll < 0 {
+		m.pagerScroll = 0
+	}
+	m.mode = modePager
+	return m, nil
+}
+
+func (m Model) handleTick(tickMsg) (tea.Model, tea.Cmd) {
+	// Refresh the live pane preview, then reschedule. A config preview is
+	// static, so leave it alone — keyed off what's actually being shown
+	// rather than off which panel has focus.
+	//
+	// The ticker keeps running while the terminal is unfocused but does no
+	// work: a session manager sitting in a background tab was spending a
+	// capture-pane every second and a list sweep every three, forever, for a
+	// screen nobody was looking at.
+	var cmd tea.Cmd
+	if !m.blurred && m.previewSrc == previewPane {
+		cmd = m.reloadPreview()
+	}
+	return m, tea.Batch(cmd, tick())
+}
+
+func (m Model) handleListTick(listTickMsg) (tea.Model, tea.Cmd) {
+	// Re-read the lists so sessions started or ended elsewhere show up.
+	// Held off while a modal is open, so the data under a confirm prompt
+	// can't change between reading it and answering it.
+	if m.blurred || (m.mode != modeNormal && m.mode != modeFilter) {
+		return m, listTick()
+	}
+	return m, tea.Batch(append(m.refreshLists(), listTick())...)
+}
+
+func (m Model) handleProjects(msg projectsMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		m.err = msg.err
+		return m, nil
+	}
+	m.projects = msg.projects
+	m.cur[panelProjects] = clamp(m.cur[panelProjects], m.panelLen(panelProjects))
+	if msg.warnings != "" {
+		// A non-fatal hook warning from whatever triggered this reload
+		// (e.g. killProjectCmd's on_project_exit) — visible, but must not
+		// block the list refresh above the way a real err does.
+		m.err = errors.New(msg.warnings)
+	}
+	if m.focus == panelProjects {
+		return m, m.updatePreview()
+	}
+	return m, nil
+}
+
+func (m Model) handleLists(msg listsMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		m.err = msg.err
+		return m, nil
+	}
+	updated, projectCmd := m.Update(projectsMsg{projects: msg.projects})
+	m = updated.(Model)
+	updated, sessionCmd := m.Update(sessionsMsg{sessions: msg.sessions})
+	m = updated.(Model)
+	return m, tea.Batch(projectCmd, sessionCmd)
+}
+
+func (m Model) handleConfigPreview(msg configPreviewMsg) (tea.Model, tea.Cmd) {
+	if m.previewSrc != previewConfig {
+		return m, nil
+	}
+	if p, ok := m.currentProject(); !ok || p.Path != msg.path {
+		return m, nil
+	}
+	if msg.err != nil {
+		m.preview = msg.err.Error()
+		return m, nil
+	}
+	m.preview = msg.content
+	return m, nil
+}
+
+func (m Model) handleProjectStarted(msg projectStartedMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		m.err = msg.err
+		return m, nil
+	}
+	m.pendingAttach = msg.sessionID
+	if msg.warnings != "" {
+		// A non-fatal build/attach-hook warning — visible via
+		// runProgram's post-quit report, but must not block the attach
+		// this message is already committed to.
+		m.err = errors.New(msg.warnings)
+	}
+	return m, tea.Quit
+}
+
+func (m Model) handleSessions(msg sessionsMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		m.err = msg.err
+		return m, nil
+	}
+	m.err = nil
+	// Capture the selected session's identity before the list underneath
+	// it is replaced outright: a periodic refresh can add, remove, or
+	// reorder sessions with no input from the user, and a bare index
+	// would then silently select whichever session ends up in that slot
+	// instead of the one actually selected — see rebaseFilteredCursor.
+	prevName := ""
+	if e, ok := m.currentSessionEntry(); ok {
+		prevName = e.Name
+	}
+	m.sessions = msg.sessions
+	m.cur[panelSessions] = clamp(m.cur[panelSessions], m.panelLen(panelSessions))
+	if prevName != "" {
+		if i := indexOfSession(m.visibleSessions(), prevName); i >= 0 {
+			m.cur[panelSessions] = i
+		}
+	}
+	return m, m.reloadWindows()
+}
+
+func (m Model) handleWindows(msg windowsMsg) (tea.Model, tea.Cmd) {
+	// Ignore a stale response for a session we've since moved off of.
+	if s, ok := m.currentSession(); !ok || s.ID != msg.sessionID {
+		return m, nil
+	}
+	if msg.err != nil {
+		m.err = msg.err
+		return m, nil
+	}
+	prevID := ""
+	if w, ok := m.currentWindow(); ok {
+		prevID = w.ID
+	}
+	m.windows = msg.windows
+	m.cur[panelWindows] = activeOrClamp(m.cur[panelWindows], m.visibleWindows())
+	if prevID != "" {
+		if i := indexOfWindow(m.visibleWindows(), prevID); i >= 0 {
+			m.cur[panelWindows] = i
+		}
+	}
+	return m, m.reloadPanes()
+}
+
+func (m Model) handlePanes(msg panesMsg) (tea.Model, tea.Cmd) {
+	if w, ok := m.currentWindow(); !ok || w.ID != msg.windowID {
+		return m, nil
+	}
+	if msg.err != nil {
+		m.err = msg.err
+		return m, nil
+	}
+	prevID := ""
+	if p, ok := m.currentPane(); ok {
+		prevID = p.ID
+	}
+	m.panes = msg.panes
+	m.cur[panelPanes] = activePaneOrClamp(m.cur[panelPanes], m.visiblePanes())
+	if prevID != "" {
+		if i := indexOfPane(m.visiblePanes(), prevID); i >= 0 {
+			m.cur[panelPanes] = i
+		}
+	}
+	return m, m.reloadPreview()
+}
+
+func (m Model) handleAllPanes(msg allPanesMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		m.err = msg.err
+		return m, nil
+	}
+	m.allPanes = msg.panes
+	m.findPaneCur = clamp(m.findPaneCur, len(m.visibleAllPanes()))
+	return m, nil
+}
+
+func (m Model) handlePreview(msg previewMsg) (tea.Model, tea.Cmd) {
+	if m.previewSrc != previewPane {
+		return m, nil
+	}
+	if p, ok := m.currentPane(); !ok || p.ID != msg.paneID {
+		return m, nil
+	}
+	if msg.err != nil {
+		m.preview = msg.err.Error()
+		return m, nil
+	}
+	m.preview = msg.content
+	if p, ok := m.currentPane(); ok {
+		m.previewTitle = p.ID + " " + p.Command
+	}
 	return m, nil
 }
 
@@ -1103,8 +1143,52 @@ func (m Model) handleHelpKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// panelKey is a key that only means something on some panels. It does nothing
+// elsewhere, so it can never act on a selection in a panel that doesn't have
+// focus while the contextual help says otherwise.
+type panelKey struct {
+	panels []panel
+	run    func(Model) (tea.Model, tea.Cmd)
+}
+
+var panelKeys = map[string]panelKey{
+	// "a" is scoped to the panel it changes, like "e" on Projects. The row
+	// under the cursor moves when the list grows or shrinks, so the window
+	// cascade has to follow it — clampFocused is exactly that.
+	"a": {[]panel{panelSessions}, func(m Model) (tea.Model, tea.Cmd) {
+		m.allSessions = !m.allSessions
+		return m.clampFocused()
+	}},
+	"n": {[]panel{panelSessions, panelWindows}, Model.startNewWindow},
+	"<": {[]panel{panelWindows}, func(m Model) (tea.Model, tea.Cmd) { return m.swapWindow(-1) }},
+	">": {[]panel{panelWindows}, func(m Model) (tea.Model, tea.Cmd) { return m.swapWindow(1) }},
+	"w": {[]panel{panelWindows}, Model.startMoveWindow},
+	"s": {[]panel{panelWindows, panelPanes}, func(m Model) (tea.Model, tea.Cmd) { return m.startSplitPane(false) }},
+	"S": {[]panel{panelWindows, panelPanes}, func(m Model) (tea.Model, tea.Cmd) { return m.startSplitPane(true) }},
+	"L": {[]panel{panelWindows}, Model.cycleLayout},
+	"z": {[]panel{panelPanes}, Model.zoomPane},
+	"Y": {[]panel{panelPanes}, Model.startApproveAgent},
+	"e": {[]panel{panelProjects}, Model.editProject},
+}
+
+// keyAliases maps alternate spellings onto the panelKeys entry they share.
+var keyAliases = map[string]string{"K": "<", "J": ">", "W": "w", "v": "s"}
+
 func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
+	key := msg.String()
+	if alias, ok := keyAliases[key]; ok {
+		key = alias
+	}
+	if pk, ok := panelKeys[key]; ok {
+		for _, p := range pk.panels {
+			if p == m.focus {
+				return pk.run(m)
+			}
+		}
+		return m, nil
+	}
+
+	switch key {
 	case "ctrl+c", "q":
 		return m, tea.Quit
 	case "R":
@@ -1130,7 +1214,7 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "1", "2", "3", "4":
 		// The digits address the panels this model actually shows, so in compact
 		// mode "1" is Sessions rather than a Projects panel that isn't there.
-		return m.focusPanelAt(int(msg.String()[0] - '1'))
+		return m.focusPanelAt(int(key[0] - '1'))
 	case "up", "k":
 		return m.moveCursor(-1)
 	case "down", "j":
@@ -1155,67 +1239,12 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "enter":
 		return m.activateSelection()
-	case "a":
-		// Scoped to the panel it changes, like "e" on Projects.
-		if m.focus != panelSessions {
-			return m, nil
-		}
-		m.allSessions = !m.allSessions
-		// The row under the cursor moves when the list grows or shrinks, so
-		// the window cascade has to follow it — clampFocused is exactly that.
-		return m.clampFocused()
 	case "x":
 		return m.startKill()
 	case "r":
 		return m.startRename()
-	case "n":
-		// Scoped to the panels whose footer advertises it. These used to fire
-		// from any panel, acting on a selection in a panel that didn't have
-		// focus while the contextual help said otherwise.
-		if m.focus != panelSessions && m.focus != panelWindows {
-			return m, nil
-		}
-		return m.startNewWindow()
-	case "<", "K":
-		if m.focus != panelWindows {
-			return m, nil
-		}
-		return m.swapWindow(-1)
-	case ">", "J":
-		if m.focus != panelWindows {
-			return m, nil
-		}
-		return m.swapWindow(1)
-	case "w", "W":
-		if m.focus != panelWindows {
-			return m, nil
-		}
-		return m.startMoveWindow()
-	case "s", "v":
-		if m.focus != panelWindows && m.focus != panelPanes {
-			return m, nil
-		}
-		return m.startSplitPane(false)
-	case "S":
-		if m.focus != panelWindows && m.focus != panelPanes {
-			return m, nil
-		}
-		return m.startSplitPane(true)
-	case "L":
-		if m.focus != panelWindows {
-			return m, nil
-		}
-		return m.cycleLayout()
-	case "z":
-		if m.focus != panelPanes {
-			return m, nil
-		}
-		return m.zoomPane()
-	case "e":
-		if m.focus != panelProjects {
-			return m, nil
-		}
-		return m.editProject()
+	case "b":
+		return m.jumpToBlockedAgent()
 	case "?":
 		m.mode = modeHelp
 		m.helpScroll = 0
@@ -1241,40 +1270,38 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "y":
-		switch m.focus {
-		case panelSessions:
-			if s, ok := m.currentSession(); ok {
-				return m, copyCmd(s.Name, fmt.Sprintf("session %q", s.Name))
-			}
-		case panelProjects:
-			if p, ok := m.currentProject(); ok {
-				path := p.Path
-				if path == "" {
-					path = p.Root
-				}
-				return m, copyCmd(path, fmt.Sprintf("project path %q", path))
-			}
-		case panelWindows:
-			if w, ok := m.currentWindow(); ok {
-				return m, copyCmd(w.Name, fmt.Sprintf("window %q", w.Name))
-			}
-		case panelPanes:
-			if p, ok := m.currentPane(); ok {
-				return m, copyCmd(m.preview, fmt.Sprintf("pane %s preview", p.ID))
-			}
-		}
-		return m, nil
+		return m.copySelection()
 	}
 	return m, nil
 }
 
-// copy puts text on the system clipboard and reports what actually happened.
-//
-// Every call site used to discard the error and announce success regardless,
-// which on a host with no clipboard tool meant "y" printed "copied ..." and did
-// nothing at all. There is no OSC 52 fallback here on purpose: it would have to
-// be written to the terminal, which Bubble Tea owns while the TUI is up — see
-// clipboard.OSC52.
+// copySelection copies whatever identifies the focused panel's selection.
+func (m Model) copySelection() (tea.Model, tea.Cmd) {
+	switch m.focus {
+	case panelSessions:
+		if s, ok := m.currentSession(); ok {
+			return m, copyCmd(s.Name, fmt.Sprintf("session %q", s.Name))
+		}
+	case panelProjects:
+		if p, ok := m.currentProject(); ok {
+			path := p.Path
+			if path == "" {
+				path = p.Root
+			}
+			return m, copyCmd(path, fmt.Sprintf("project path %q", path))
+		}
+	case panelWindows:
+		if w, ok := m.currentWindow(); ok {
+			return m, copyCmd(w.Name, fmt.Sprintf("window %q", w.Name))
+		}
+	case panelPanes:
+		if p, ok := m.currentPane(); ok {
+			return m, copyCmd(m.preview, fmt.Sprintf("pane %s preview", p.ID))
+		}
+	}
+	return m, nil
+}
+
 // clipboardWrite is clipboard.Write behind a variable so a test can exercise
 // the copy keys on a machine that has no clipboard tool at all — CI runners
 // have none, and Model must stay comparable, so this cannot be a func field.
@@ -1285,6 +1312,11 @@ type clipboardMsg struct {
 	err  error
 }
 
+// copyCmd puts text on the system clipboard and reports what actually
+// happened: on a host with no clipboard tool, "y" says so rather than
+// announcing a copy that didn't happen. There is no OSC 52 fallback on
+// purpose: it would have to be written to the terminal, which Bubble Tea owns
+// while the TUI is up — see clipboard.OSC52.
 func copyCmd(text, what string) tea.Cmd {
 	write := clipboardWrite
 	return func() tea.Msg { return clipboardMsg{what: what, err: write(text)} }
@@ -1660,6 +1692,26 @@ func (m Model) zoomPane() (tea.Model, tea.Cmd) {
 	return m, zoomPaneCmd(m.runner, p.ID)
 }
 
+// handleTrustNeeded turns a start that hit an untrusted config into a
+// confirmation. The modal is one line, so it names the config and counts its
+// commands; `wyrm up -n` or the config preview shows them in full.
+func (m Model) handleTrustNeeded(msg trustNeededMsg) (tea.Model, tea.Cmd) {
+	state := "is not trusted"
+	if msg.changed {
+		state = "changed since you trusted it"
+	}
+	first := ""
+	if len(msg.commands) > 0 {
+		first = " — " + msg.commands[0]
+	}
+	p := msg.project
+	m.pending = pendingAction{op: opTrustAndStart, path: p.Path, root: p.Root, wildcard: p.Wildcard, fingerprint: msg.fingerprint}
+	m.confirmPrompt = fmt.Sprintf("%s %s: it runs %d shell command(s)%s. Trust it and start?  (y/n)",
+		p.Path, state, len(msg.commands), first)
+	m.mode = modeConfirm
+	return m, nil
+}
+
 // startProject builds-or-attaches the selected project's session and hands the
 // terminal over (session.Create is idempotent, so this is start *and* attach).
 func (m Model) startProject() (tea.Model, tea.Cmd) {
@@ -1750,11 +1802,10 @@ func (m Model) setCursor(p panel, next int) (tea.Model, tea.Cmd) {
 // selectionChanged resets the panels that hang off p and returns the command
 // that reloads them.
 //
-// The cascade used to be spelled out per panel in both setCursor and
-// clampFocused, four cases each. Resetting a child to -1 rather than 0 is what
-// makes the reload snap to whatever tmux reports as active instead of to the
-// first row. Which panel feeds which, and what to re-fetch, come from the panel
-// table — see panels.go.
+// Resetting a child to -1 rather than 0 is what makes the reload snap to
+// whatever tmux reports as active instead of to the first row. Which panel
+// feeds which, and what to re-fetch, come from the panel table — see
+// panels.go.
 func (m *Model) selectionChanged(p panel) tea.Cmd {
 	for child := p.spec().child; child != noPanel; child = child.spec().child {
 		m.cur[child] = -1
@@ -1842,13 +1893,8 @@ func Run(runner tmux.Runner, settings *config.Settings, stderr io.Writer) (pendi
 // model and the same key map, with only the Sessions and Windows panels shown
 // and the filter already open so typing narrows the list immediately.
 //
-// It is the same program as Run on purpose. `wyrm pick` used to be a second,
-// independent implementation — a hand-rolled raw-mode terminal loop with its
-// own escape-sequence decoder, its own frame renderer, its own signal handling
-// and its own key names — offering a strict subset of what the TUI already did.
-// Two key maps that disagreed about how to kill a session was the visible cost;
-// the invisible one was that every new feature had to be built twice or quietly
-// exist in only one of them.
+// It is the same program as Run on purpose: one key map, and every feature
+// built once for both.
 func RunPicker(runner tmux.Runner, settings *config.Settings, stderr io.Writer) (pendingAttach string, err error) {
 	m := New(runner, settings)
 	m.compact = true

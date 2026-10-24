@@ -2,6 +2,7 @@ package tui
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/jskoll/wyrm/internal/sessions"
 	"github.com/jskoll/wyrm/internal/state"
 	"github.com/jskoll/wyrm/internal/tmux"
+	"github.com/jskoll/wyrm/internal/trust"
 	"github.com/jskoll/wyrm/internal/zoxide"
 )
 
@@ -47,10 +49,8 @@ type Project struct {
 func listProjects(r tmux.Runner, settings *config.Settings) ([]Project, error) {
 	// sessions.List already treats "no server running" as an empty list, not
 	// an error — so any error it does return is a real one (permission,
-	// a broken tmux config, ...). Ignoring it here used to mean every
-	// project displayed as stopped whenever the list call failed, silently
-	// misrepresenting what was actually running rather than surfacing the
-	// failure.
+	// a broken tmux config, ...). Ignoring it would show every project as
+	// stopped whenever the list call failed.
 	sessionList, err := sessions.List(r)
 	if err != nil {
 		return nil, err
@@ -167,34 +167,95 @@ func startProjectCmd(r tmux.Runner, settings *config.Settings, p Project) tea.Cm
 		if err != nil {
 			return projectStartedMsg{err: err}
 		}
-		hist, err := state.Load()
+		if msg, ok := checkTrust(settings, p.configProject(), cfg); !ok {
+			return msg
+		}
+		return buildProject(r, settings, p.Root, cfg)
+	}
+}
+
+// trustNeededMsg asks Update to confirm a config before it runs: the TUI's
+// form of the CLI's trust prompt (see internal/trust).
+type trustNeededMsg struct {
+	project     config.Project
+	fingerprint string
+	commands    []string
+	changed     bool
+}
+
+// checkTrust returns the message to show instead of starting cfg, and false,
+// when cfg needs a trust decision the user hasn't made.
+func checkTrust(settings *config.Settings, p config.Project, cfg *config.Config) (tea.Msg, bool) {
+	if !trust.Required(settings, cfg) {
+		return nil, true
+	}
+	store, err := trust.Load()
+	if err != nil {
+		return projectStartedMsg{err: err}, false
+	}
+	switch store.Check(cfg.Path(), cfg.Fingerprint()) {
+	case trust.Trusted:
+		return nil, true
+	case trust.Denied:
+		return projectStartedMsg{err: fmt.Errorf("%s was denied; run `wyrm allow %s` once you've reviewed it", cfg.Path(), cfg.Path())}, false
+	case trust.Changed:
+		return trustNeededMsg{project: p, fingerprint: cfg.Fingerprint(), commands: cfg.Commands(), changed: true}, false
+	}
+	return trustNeededMsg{project: p, fingerprint: cfg.Fingerprint(), commands: cfg.Commands()}, false
+}
+
+// trustAndStartCmd records the trust the user just gave and starts the
+// project — but only if the config is still exactly what they were shown.
+func trustAndStartCmd(r tmux.Runner, settings *config.Settings, p config.Project, fingerprint string) tea.Cmd {
+	return func() tea.Msg {
+		cfg, err := p.LoadConfig()
 		if err != nil {
 			return projectStartedMsg{err: err}
 		}
-		// Captured rather than discarded: Create's own per-pane warnings (a
-		// failed split, a hook that exited non-zero, ...) reach the CLI's
-		// stderr directly, but discarding them here left the TUI the only
-		// place a project could be started with something silently having
-		// gone wrong.
-		var warnings bytes.Buffer
-		_, id, _, err := session.Create(r, cfg, io.Discard, &warnings, session.WithHistory(hist))
-		if err == nil {
-			// projectStartedMsg always quits into an attach (see Update), so
-			// this is an attach — session.Create no longer runs the hook.
-			_ = session.RunAttachHook(cfg, &warnings)
+		if cfg.Fingerprint() != fingerprint {
+			return projectStartedMsg{err: fmt.Errorf("%s changed while you were deciding; start it again to review", cfg.Path())}
 		}
-		if err == nil && p.Root != "" && settings.ZoxideTrack() && zoxide.Available() {
-			// Best-effort: teaching zoxide about a directory wyrm just
-			// built a session for is a nice-to-have, never worth failing
-			// the session build over.
-			_ = zoxide.Add(p.Root)
+		store, err := trust.Load()
+		if err != nil {
+			return projectStartedMsg{err: err}
 		}
-		msg := projectStartedMsg{sessionID: id, err: err}
-		if err == nil && warnings.Len() > 0 {
-			msg.warnings = strings.TrimSpace(warnings.String())
+		if err := store.Allow(cfg.Path(), fingerprint); err != nil {
+			return projectStartedMsg{err: err}
 		}
-		return msg
+		return buildProject(r, settings, p.Root, cfg)
 	}
+}
+
+// buildProject builds (or reuses) cfg's session and resolves to the
+// projectStartedMsg that attaches to it.
+func buildProject(r tmux.Runner, settings *config.Settings, root string, cfg *config.Config) tea.Msg {
+	hist, err := state.Load()
+	if err != nil {
+		return projectStartedMsg{err: err}
+	}
+	// Captured rather than discarded: Create's own per-pane warnings (a
+	// failed split, a hook that exited non-zero, ...) reach the CLI's
+	// stderr directly, but discarding them here left the TUI the only
+	// place a project could be started with something silently having
+	// gone wrong.
+	var warnings bytes.Buffer
+	_, id, _, err := session.Create(r, cfg, io.Discard, &warnings, session.WithHistory(hist))
+	if err == nil {
+		// projectStartedMsg always quits into an attach (see Update), so
+		// this is an attach — session.Create no longer runs the hook.
+		_ = session.RunAttachHook(cfg, &warnings)
+	}
+	if err == nil && root != "" && settings.ZoxideTrack() && zoxide.Available() {
+		// Best-effort: teaching zoxide about a directory wyrm just
+		// built a session for is a nice-to-have, never worth failing
+		// the session build over.
+		_ = zoxide.Add(root)
+	}
+	msg := projectStartedMsg{sessionID: id, err: err}
+	if err == nil && warnings.Len() > 0 {
+		msg.warnings = strings.TrimSpace(warnings.String())
+	}
+	return msg
 }
 
 // configProject is the discovery-layer view of this project — the identity
@@ -237,7 +298,14 @@ func killProjectCmd(r tmux.Runner, settings *config.Settings, p config.Project) 
 		// only place a project could be stopped with its exit hook silently
 		// having failed.
 		var warnings bytes.Buffer
-		if _, err := session.Kill(r, cfg, &warnings); err != nil {
+		var opts []session.Option
+		if _, trusted := checkTrust(settings, p, cfg); !trusted {
+			// Stopping a session shouldn't depend on trusting its config; only
+			// running the config's shell should. Say what was skipped.
+			opts = append(opts, session.SkipHooks())
+			fmt.Fprintf(&warnings, "%s is not trusted, so its on_project_exit did not run\n", cfg.Path())
+		}
+		if _, err := session.Kill(r, cfg, &warnings, opts...); err != nil {
 			return actionErrMsg{err}
 		}
 		ps, lerr := listProjects(r, settings)

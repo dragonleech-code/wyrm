@@ -5,6 +5,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/jskoll/wyrm/internal/agent"
 	"github.com/jskoll/wyrm/internal/config"
 	"github.com/jskoll/wyrm/internal/sessions"
 	"github.com/jskoll/wyrm/internal/tmux"
@@ -26,6 +27,8 @@ const (
 	opKillProject
 	opSplitPaneVertical
 	opSplitPaneHorizontal
+	opApproveAgent
+	opTrustAndStart
 )
 
 // pendingAction captures what a modal will do once confirmed/submitted, along
@@ -45,6 +48,9 @@ type pendingAction struct {
 	path     string // config path, for opKillProject ("" for a fileless project)
 	root     string // the project's directory, for opKillProject
 	wildcard bool   // whether path is a shared wildcard template
+
+	command     string // the pane's foreground command, for opApproveAgent
+	fingerprint string // the config's fingerprint when it was shown, for opTrustAndStart
 }
 
 // project rebuilds the identity opKillProject was stored with.
@@ -204,6 +210,10 @@ func (m Model) executePending() tea.Cmd {
 		return killPaneCmd(m.runner, m.pending.windowID, m.pending.paneID)
 	case opKillProject:
 		return killProjectCmd(m.runner, m.settings, m.pending.project())
+	case opApproveAgent:
+		return approveAgentCmd(m.runner, m.pending.paneID, agent.ApproveKeys(m.pending.command, m.agentProfiles))
+	case opTrustAndStart:
+		return trustAndStartCmd(m.runner, m.settings, m.pending.project(), m.pending.fingerprint)
 	}
 	return nil
 }
