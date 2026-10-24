@@ -1,8 +1,10 @@
 package freeze
 
 import (
+	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 )
 
 // layoutNode is one cell of a parsed tmux window_layout string: either a
@@ -21,7 +23,13 @@ type layoutNode struct {
 // braced/bracketed, comma-separated list of child cells (a container):
 // "{...}" for left-right, "[...]" for top-bottom. This is tmux's own
 // serialization (see tmux's layout-custom.c); wyrm only ever reads it back.
+//
+// tmux 3.8 reports the same tree as JSON instead — see parseJSONLayout — so a
+// value starting with "{" is read that way.
 func parseWindowLayout(layout string) (*layoutNode, error) {
+	if strings.HasPrefix(layout, "{") {
+		return parseJSONLayout(layout)
+	}
 	comma := -1
 	for i := 0; i < len(layout); i++ {
 		if layout[i] == ',' {
@@ -134,4 +142,67 @@ func (s *layoutScanner) readInt() (int, error) {
 		return 0, fmt.Errorf("expected a number at position %d in %q", start, s.data)
 	}
 	return strconv.Atoi(s.data[start:s.pos])
+}
+
+// jsonLayout is one cell of tmux 3.8's JSON #{window_layout}:
+// {"V":2,"L":{"t":"h","w":80,"h":24,"x":0,"y":0,"c":[...]}}. "t" is "h" for a
+// left-right container, "v" for top-bottom, or "p" for a pane, whose ID is
+// "I".
+type jsonLayout struct {
+	T        string       `json:"t"`
+	W        int          `json:"w"`
+	H        int          `json:"h"`
+	X        int          `json:"x"`
+	Y        int          `json:"y"`
+	ID       string       `json:"I"`
+	Children []jsonLayout `json:"c"`
+	// Index is the pane index. Unused, but declared so encoding/json's
+	// case-insensitive matching doesn't try to store it in ID.
+	Index int `json:"i"`
+}
+
+func parseJSONLayout(layout string) (*layoutNode, error) {
+	var doc struct {
+		L *jsonLayout `json:"L"`
+	}
+	if err := json.Unmarshal([]byte(layout), &doc); err != nil {
+		return nil, fmt.Errorf("parsing window layout %q: %w", layout, err)
+	}
+	if doc.L == nil {
+		return nil, fmt.Errorf("parsing window layout %q: no layout tree", layout)
+	}
+	n, err := fromJSON(*doc.L)
+	if err != nil {
+		return nil, fmt.Errorf("parsing window layout %q: %w", layout, err)
+	}
+	return n, nil
+}
+
+func fromJSON(j jsonLayout) (*layoutNode, error) {
+	n := &layoutNode{W: j.W, H: j.H, X: j.X, Y: j.Y}
+	switch j.T {
+	case "p":
+		if !strings.HasPrefix(j.ID, "%") {
+			return nil, fmt.Errorf("pane cell without a pane ID")
+		}
+		n.PaneID = j.ID
+		return n, nil
+	case "h":
+		n.Type = '{'
+	case "v":
+		n.Type = '['
+	default:
+		return nil, fmt.Errorf("unknown cell type %q", j.T)
+	}
+	if len(j.Children) == 0 {
+		return nil, fmt.Errorf("container cell with no children")
+	}
+	for _, c := range j.Children {
+		child, err := fromJSON(c)
+		if err != nil {
+			return nil, err
+		}
+		n.Children = append(n.Children, child)
+	}
+	return n, nil
 }
