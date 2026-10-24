@@ -63,10 +63,8 @@ func runnerFromSettings(settings *config.Settings) tmux.Exec {
 	return tmux.Exec{SocketName: settings.TmuxSocket(), Command: settings.TmuxCommand()}
 }
 
-// app carries the process-level dependencies every subcommand needs. Verbs take
-// one of these rather than the five separate parameters they used to, which is
-// what lets each of them return a plain error instead of hand-rolling its own
-// "print wyrm: <err> and return 1" — see run's report.
+// app carries the process-level dependencies every subcommand needs, which is
+// what lets each verb return a plain error and leave printing it to report.
 type app struct {
 	stdin          io.Reader
 	stdout, stderr io.Writer
@@ -127,8 +125,7 @@ func usageErrf(format string, args ...any) error {
 func silent(code int) error { return exitErr{nil, code} }
 
 // report turns a verb's error into an exit code, printing it with wyrm's
-// prefix. This is the single place that formatting lives; before it, the same
-// two lines were spelled out at every one of ~37 failure sites.
+// prefix. It is the only place that formatting lives.
 func (a *app) report(err error) int {
 	if err == nil {
 		return 0
@@ -151,19 +148,13 @@ func (a *app) report(err error) int {
 // The command surface is git-style subcommands: bare `wyrm` (or `wyrm up`)
 // builds or attaches the current folder's session, `wyrm <name>` attaches to
 // a running session by name, and every other mode is its own verb (kill,
-// pick, tui, save, edit, validate, list, ...). Because each verb is a
-// separate branch that parses only its own flags, the old problem of
-// silently-ignored or mutually-exclusive top-level flags can't arise.
+// pick, tui, save, edit, validate, list, ...). Each verb parses only its own
+// flags, so no flag is silently ignored by a mode it doesn't apply to.
 //
 // The verb implementations live in cmd_*.go, grouped by what they act on.
-// runOptions carries the dependencies only some callers need, so they do not
-// have to be package globals.
-//
-// run used to read appStdin and appWatchCtx from two mutable package-level
-// variables written only by tests. That contradicted run's own contract of
-// taking its dependencies as parameters, forced every test touching them to be
-// non-parallel, and left two mutable globals in the shipped binary. They are
-// options because the common case passes neither.
+// runOptions carries the dependencies only some callers need — options rather
+// than parameters because the common case passes neither, and not package
+// globals so tests touching them can still run in parallel.
 type runOptions struct {
 	// stdin is what prompts read from. nil means os.Stdin.
 	stdin io.Reader
@@ -227,11 +218,28 @@ func runWith(opts runOptions, args []string, stdout, stderr io.Writer, runner tm
 		return a.report(a.setupTmux(args[1:]))
 	case "doctor":
 		return a.report(a.doctor(args[1:]))
+	case "allow":
+		return a.report(a.allow(args[1:]))
+	case "deny":
+		return a.report(a.deny(args[1:]))
+	case "diff":
+		return a.report(a.diff(args[1:]))
+	case "wait":
+		return a.report(a.waitCmd(args[1:]))
+	case "agent":
+		return a.report(a.agentCmd(args[1:]))
+	case "worktree":
+		return a.report(a.worktree(args[1:]))
+	case "schema":
+		return a.report(a.schema(args[1:]))
 	default:
 		if strings.HasPrefix(cmd, "-") {
 			// A bare flag with no subcommand (e.g. `wyrm -config x`) drives the
 			// default build/attach, so the common `wyrm -config foo` still works.
 			return a.report(a.up(args))
+		}
+		if ws, ok := strings.CutPrefix(cmd, "@"); ok && ws != "" {
+			return a.report(a.upWorkspace(ws, args[1:]))
 		}
 		// Anything else is a running session name to attach to, or a known
 		// project to start. This is what shell completion (see completions/)
@@ -287,21 +295,29 @@ const usage = `wyrm — repeatable tmux session layouts from a TOML config.
 
 Usage:
   wyrm [-config PATH]        build or attach the current folder's session (default)
-  wyrm up [-config PATH]     same as bare wyrm, spelled explicitly (-n to dry-run, -d to skip attaching)
+  wyrm up [-config PATH]     same as bare wyrm, spelled explicitly (-n, -d, -reconcile, -host H)
   wyrm <name>                attach to a running session, or start a known project, by name
+  wyrm @workspace            start every project in a [[workspace]] and attach to the first (-d)
   wyrm restart [-config P]   stop the session and build it again (-all, -n, -d, -y)
-  wyrm kill [name]           destroy the session (runs on_project_exit first; -all, -n, -y)
+  wyrm kill [name|@ws]       destroy the session (runs on_project_exit first; -all, -n, -y, -host H)
   wyrm pick                  fuzzy-pick a running session and attach to it
   wyrm tui                   full-screen session manager (browse, preview, manage)
   wyrm save [-config PATH]   save the running session's layout as this folder's config (-stdout, -n)
   wyrm edit [-config PATH]   open the resolved config in $EDITOR, creating one if needed
-  wyrm validate [-config P]  check the effective config parses and validates (-strict)
-  wyrm status [-format FMT]  print agent status across sessions (FMT: text, json, tmux, waybar, sketchybar)
+  wyrm validate [-config P]  check the effective config parses and validates (-strict, -explain)
+  wyrm diff [name]           show how the running session differs from its config (-format json)
+  wyrm allow [path]          trust a project config so wyrm runs its commands (-list, -revoke)
+  wyrm deny [path]           refuse a project config: wyrm will not run it
+  wyrm status [-format FMT]  print agent status across sessions (FMT: text, json, jsonl, tmux, waybar, sketchybar)
+  wyrm agent next|approve    jump to the next waiting agent, or accept a blocked agent's prompt
   wyrm send [target] [cmd]   send command or keys to target session/window/pane (-l, -n, -r)
   wyrm list [-format FMT]    list running sessions (FMT: table, json, toml, names)
   wyrm list-configs [-names] list config paths, or project names and aliases
   wyrm migrate-config        move the local config into the shared config directory
   wyrm clone REPO [DEST]     git clone, then confirm and build a session for it (-y, -no-start)
+  wyrm worktree BRANCH       create a git worktree for BRANCH and start a session in it (-base, -path, -d)
+  wyrm wait TARGET...        wait for tcp:HOST:PORT, file:PATH, or a URL to be ready (-timeout)
+  wyrm schema                print the JSON Schema for .wyrm.toml, for editor completion
   wyrm init [-template T]    scaffold a project config interactively or with -template (-force)
   wyrm selfupdate            download and install the latest release (-check, -version V)
   wyrm setup-tmux            generate or append recommended tmux popup configuration (-a)
@@ -405,6 +421,7 @@ func (a *app) resolveConfig(settings *config.Settings, explicitPath string) (*co
 var knownSubcommands = []string{
 	"up", "restart", "kill", "pick", "tui", "save", "edit", "validate", "status", "send", "setup-tmux",
 	"list", "list-configs", "migrate-config", "clone", "init", "selfupdate", "doctor", "version", "help",
+	"allow", "deny", "diff", "wait", "agent", "worktree", "schema",
 }
 
 // nearestSubcommand returns the known subcommand closest to name by edit

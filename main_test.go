@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/jskoll/wyrm/internal/config"
+	"github.com/jskoll/wyrm/internal/trust"
 )
 
 // TestMain isolates every test in this package from the developer's real
@@ -26,6 +27,9 @@ func TestMain(m *testing.M) {
 	}
 	os.Setenv("XDG_CONFIG_HOME", dir)
 	os.Setenv("HOME", dir)
+	// Configs written by tests run shell by design; the trust prompt is
+	// exercised by the tests that clear this (see cmd_trust_test.go).
+	os.Setenv(trust.EnvTrustAll, "1")
 	code := m.Run()
 	os.RemoveAll(dir)
 	os.Exit(code)
@@ -209,7 +213,7 @@ func TestSubcommandHelpShowsSynopsisAndFlags(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0", code)
 	}
-	if !strings.Contains(stderr.String(), "wyrm kill [name]") {
+	if !strings.Contains(stderr.String(), "wyrm kill [name|@ws]") {
 		t.Errorf("stderr = %q, want the subcommand's usage-line synopsis", stderr.String())
 	}
 	if !strings.Contains(stderr.String(), "Flags:") || !strings.Contains(stderr.String(), "-config") {

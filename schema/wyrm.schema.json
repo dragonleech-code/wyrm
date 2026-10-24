@@ -1,0 +1,230 @@
+{
+  "$defs": {
+    "Split": {
+      "additionalProperties": false,
+      "properties": {
+        "children": {
+          "description": "Splits within this pane.",
+          "items": {
+            "$ref": "#/$defs/Split"
+          },
+          "type": "array"
+        },
+        "command": {
+          "description": "Typed into the pane's shell.",
+          "type": "string"
+        },
+        "env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "remain_on_exit": {
+          "type": "boolean"
+        },
+        "root": {
+          "type": "string"
+        },
+        "run": {
+          "description": "Run as the pane's own process, with no shell underneath.",
+          "type": "string"
+        },
+        "size": {
+          "description": "Percentage of the split pane given to the new one (1-99).",
+          "type": "integer"
+        },
+        "type": {
+          "description": "Split direction. Omit on the first entry to use the window's initial pane.",
+          "enum": [
+            "h",
+            "horizontal",
+            "v",
+            "vertical"
+          ],
+          "type": "string"
+        },
+        "wait_for": {
+          "description": "Delay command or run until ready: tcp:HOST:PORT, file:PATH, or an http(s) URL.",
+          "type": "string"
+        },
+        "wait_timeout": {
+          "description": "Give up waiting after this long (default 2m).",
+          "type": "string"
+        },
+        "zoom": {
+          "description": "Deprecated alias for zoomed.",
+          "type": "boolean"
+        },
+        "zoomed": {
+          "description": "Start this pane zoomed.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$id": "https://raw.githubusercontent.com/jskoll/wyrm/main/schema/wyrm.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "extends": {
+      "description": "A base config this one builds on, relative to this file. Session keys set here override the base's; a window with the same name replaces the base's.",
+      "type": "string"
+    },
+    "session": {
+      "additionalProperties": false,
+      "description": "The tmux session and its lifecycle hooks.",
+      "properties": {
+        "aliases": {
+          "description": "Extra names `wyrm \u003cname\u003e` accepts for this project.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "enable_pane_titles": {
+          "description": "Show tmux pane border titles.",
+          "type": "boolean"
+        },
+        "env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Environment variables for every pane and hook.",
+          "type": "object"
+        },
+        "hook_timeout": {
+          "description": "Limit for each hook and post_window, as a duration such as \"90s\" or \"5m\".",
+          "type": "string"
+        },
+        "name": {
+          "description": "Session name. Defaults to the root directory's name.",
+          "type": "string"
+        },
+        "on_project_attach": {
+          "description": "Shell run each time wyrm attaches to the session.",
+          "type": "string"
+        },
+        "on_project_detach": {
+          "description": "Shell run by tmux when a client detaches.",
+          "type": "string"
+        },
+        "on_project_exit": {
+          "description": "Shell run before `wyrm kill` destroys the session.",
+          "type": "string"
+        },
+        "on_project_first_start": {
+          "description": "Shell run before the very first build of this project.",
+          "type": "string"
+        },
+        "on_project_restart": {
+          "description": "Shell run before every build after the first.",
+          "type": "string"
+        },
+        "on_project_start": {
+          "description": "Shell run before a fresh build.",
+          "type": "string"
+        },
+        "pane_title_format": {
+          "description": "tmux format for pane titles.",
+          "type": "string"
+        },
+        "pane_title_position": {
+          "description": "Where pane titles are drawn.",
+          "enum": [
+            "top",
+            "bottom"
+          ],
+          "type": "string"
+        },
+        "project_dir": {
+          "description": "Written by `wyrm migrate-config`: the project directory a shared config belongs to.",
+          "type": "string"
+        },
+        "root": {
+          "description": "Session directory. Relative paths resolve against this file's directory; ~ and $VAR expand.",
+          "type": "string"
+        },
+        "startup_pane": {
+          "description": "Pane index to focus in startup_window.",
+          "type": "integer"
+        },
+        "startup_window": {
+          "description": "Window to focus after building, by name or index.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "windows": {
+      "description": "The session's windows, in order.",
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "env": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "layout": {
+            "description": "tmux layout for the legacy panes list.",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "panes": {
+            "description": "Deprecated flat pane list; use splits.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "command": {
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "post_window": {
+            "description": "Shell run once every pane of the window exists.",
+            "type": "string"
+          },
+          "pre_window": {
+            "description": "Typed into every pane of the window before its own command.",
+            "type": "string"
+          },
+          "remain_on_exit": {
+            "description": "Keep panes open after their process exits.",
+            "type": "boolean"
+          },
+          "root": {
+            "description": "Window directory, relative to session.root.",
+            "type": "string"
+          },
+          "splits": {
+            "description": "The window's split tree.",
+            "items": {
+              "$ref": "#/$defs/Split"
+            },
+            "type": "array"
+          },
+          "synchronize": {
+            "description": "Turn on synchronize-panes for this window.",
+            "type": "boolean"
+          },
+          "synchronize_panes": {
+            "description": "Deprecated alias for synchronize.",
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "type": "array"
+    }
+  },
+  "title": "wyrm session config",
+  "type": "object"
+}
