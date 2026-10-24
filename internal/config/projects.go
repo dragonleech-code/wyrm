@@ -39,11 +39,10 @@ type Project struct {
 // nameCache memoizes ProjectName/aliases by file identity, so repeated
 // discovery doesn't re-read and re-parse every config on disk.
 //
-// The TUI calls DiscoverProjects on a 3-second timer, and each call used to
-// Load() every shared config to work out its session name — twenty projects
-// meant twenty file reads and twenty TOML parses every three seconds, forever.
-// Keying on (size, mtime) means an edit is still picked up on the next tick,
-// which is what the timer is for.
+// The TUI calls DiscoverProjects on a 3-second timer; without the cache every
+// tick would read and parse every shared config just to learn its session
+// name. Keying on (size, mtime) means an edit is still picked up on the next
+// tick, which is what the timer is for.
 var nameCache sync.Map // path -> nameCacheEntry
 
 type nameCacheEntry struct {
@@ -72,9 +71,8 @@ func cachedProjectInfo(path string, shared bool, info os.FileInfo) (name string,
 			return e.name, e.aliases
 		}
 	}
-	// One Load, not two. This used to call ProjectName (which loads) and then
-	// Load again for the aliases, parsing every config on disk twice per cache
-	// miss — and a cold cache is every first tick of the TUI.
+	// One Load for both the name and the aliases: a cold cache is every first
+	// tick of the TUI.
 	cfg, err := Load(path)
 	if err != nil {
 		name = ProjectName(path, shared)
@@ -429,11 +427,10 @@ func (ix ProjectIndex) Projects() []Project { return ix.projects }
 //     session up by.
 //
 // Every caller that turns a Project into a session — building it, attaching to
-// it, or killing it — must go through here. Three of them used to call
-// Load(p.Path) directly, which for a wildcard project resolved the session name
-// from the template's directory: `wyrm kill <project>` reported the wrong
-// session as not running, and `wyrm restart -all` built a spurious session
-// rooted in the shared config directory.
+// it, or killing it — must go through here. Load(p.Path) alone resolves a
+// wildcard project's session name from the template's directory, so `wyrm
+// kill <project>` would look for the wrong session and `wyrm restart -all`
+// would build one rooted in the shared config directory.
 func (p Project) LoadConfig() (*Config, error) {
 	if p.Path == "" {
 		cfg, err := LoadUserDefault()
@@ -489,11 +486,9 @@ func projectNameFrom(cfg *Config, path string, shared bool) string {
 		// project sharing that convention after the shared folder — but an
 		// absolute (or ~/$-expanded) root names the project it actually
 		// points at, exactly what Session.Resolve derives when the session
-		// is actually built. Falling back to the shared filename in that
-		// case (as this used to do unconditionally) let a disambiguated
-		// filename like "api-123.wyrm.toml" display and discover a project
-		// as "api-123" while the session it built and searched for was
-		// named "api" — the two never agreeing anywhere.
+		// is actually built. Falling back to the shared filename here would
+		// let a disambiguated "api-123.wyrm.toml" display as "api-123" while
+		// the session it builds and looks for is named "api".
 		if !shared || rootIndependentOfConfigDir(cfg.Session.Root) {
 			if name, _, err := cfg.Session.Resolve(cfg.Dir()); err == nil {
 				return name

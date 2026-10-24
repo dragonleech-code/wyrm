@@ -67,9 +67,8 @@ func findTmuxConfPath() string {
 	if conf := os.Getenv("TMUX_CONF"); conf != "" {
 		return conf
 	}
-	// $XDG_CONFIG_HOME, not a hardcoded ~/.config — this used to be the one
-	// path in the codebase that ignored it, so a user with XDG_CONFIG_HOME set
-	// had the snippet appended to a file tmux never reads.
+	// $XDG_CONFIG_HOME, not a hardcoded ~/.config, or a user with
+	// XDG_CONFIG_HOME set gets the snippet appended to a file tmux never reads.
 	if dir, err := config.UserConfigDir(); err == nil {
 		xdgPath := filepath.Join(dir, "tmux", "tmux.conf")
 		if _, err := os.Stat(xdgPath); err == nil {

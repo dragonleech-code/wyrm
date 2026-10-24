@@ -191,12 +191,10 @@ func RunOutputs(r Runner, cmds [][]string) []string {
 // CmdErr turns a failed Runner call into an error whose message is tmux's own
 // diagnostic.
 //
-// A Runner returns tmux's stderr in place of its stdout on failure, so every
-// call site used to write `fmt.Errorf("...: %w (%s)", err, out)` and produce
-// "creating session: exit status 1 (duplicate session: web)". The exit status
-// is the only part a user can't act on, and it led. This puts the diagnostic
-// first and keeps the original error wrapped, so errors.Is/As still reach
-// ErrNoServer and *exec.ExitError.
+// A Runner returns tmux's stderr in place of its stdout on failure. The exit
+// status is the part of that a user can't act on, so this puts tmux's
+// diagnostic first and keeps the original error wrapped, so errors.Is/As still
+// reach ErrNoServer and *exec.ExitError.
 func CmdErr(err error, out string) error {
 	if err == nil {
 		return nil

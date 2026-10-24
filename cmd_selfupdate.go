@@ -94,10 +94,9 @@ var signatureAssets = []string{"checksums.txt.minisig", "checksums.txt.sig"}
 //
 // checksums.txt is fetched from the same place as the archive it vouches for,
 // so on its own it proves the download was not corrupted — not that it came
-// from the wyrm maintainers. The signature is what separates those two, and it
-// is the reason this is worth the noise: three nested branches here used to
-// download the signature and then skip verification whenever no key was
-// embedded, which was every shipped build.
+// from the wyrm maintainers. The signature is what separates those two, so
+// every outcome — verified, unsigned, no key compiled in — is stated out loud
+// rather than quietly falling back to checksums alone.
 func (a *app) verifyChecksumsSignature(client selfupdate.HTTPDoer, rel selfupdate.Release, checksums []byte) error {
 	key := selfupdate.DefaultSigningKey
 

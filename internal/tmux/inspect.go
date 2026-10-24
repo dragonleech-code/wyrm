@@ -183,8 +183,7 @@ func ListAllPanes(r Runner) ([]PaneRef, error) {
 	refs := make([]PaneRef, 0, len(recs))
 	for _, f := range recs {
 		// These IDs are used directly as capture-pane targets, so they get the
-		// same validation every other parsed ID gets — see CheckID. This parser
-		// was the one that skipped it.
+		// same validation every other parsed ID gets — see CheckID.
 		if err := CheckIDs(f[0], f[2], f[5]); err != nil {
 			return nil, fmt.Errorf("listing panes: %w", err)
 		}
