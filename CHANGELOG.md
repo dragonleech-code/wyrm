@@ -27,6 +27,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   control characters; `notify-send` arguments can no longer be read as options.
 - Package-manager detection in `selfupdate` is bounded by the same timeout as
   every other helper process.
+- Releases build with Go 1.26.10 (the `toolchain` directive), which fixes
+  GO-2026-6809 in `crypto/x509` and GO-2026-6617 in `net/http`; Go 1.25 has no
+  fixed release. Building from source still needs only Go 1.25.
 - The release workflow passes the signing password through the environment
   rather than interpolating it into the script, and the AUR job runs with
   read-only repository permissions.
