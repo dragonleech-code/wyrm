@@ -18,6 +18,12 @@ func gitRepo(t *testing.T) string {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// git reports the toplevel with symlinks resolved, and macOS's TempDir is
+	// under /var -> /private/var, so compare against what git will say.
+	dir, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, args := range [][]string{
 		{"init", "-q", "-b", "main"},
 		{"-c", "user.email=t@example.test", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"},
