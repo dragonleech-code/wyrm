@@ -74,7 +74,10 @@ Or build from a clone: `make install` (uses `go install` with a stamped version)
 wyrm                       # use .wyrm.toml (or legacy .tmuxconfig) in the cwd
 wyrm up -n                # dry run: print the tmux commands and hooks, run neither
 wyrm up -d                # build the session without attaching
+wyrm up -reconcile        # add the windows the config defines that the running session lacks
+wyrm up -host devbox      # build the session on another machine over ssh
 wyrm <name>                # attach to a running session, or start a known project, by name
+wyrm @workspace           # start every project in a [[workspace]], attach to the first
 wyrm -config path/to/file  # explicit config
 wyrm restart              # stop the session and build it again (-n to dry-run, -d to skip attaching)
 wyrm kill [name]          # destroy the session (runs on_project_exit first; -n to dry-run)
@@ -82,13 +85,20 @@ wyrm pick                 # fuzzy-pick a running session and attach to it
 wyrm tui                  # full-screen session manager (browse, preview, kill, rename, start)
 wyrm save                 # save the running session's layout as this folder's config
 wyrm edit                 # open the resolved config in $EDITOR, creating one if needed
-wyrm validate             # check the effective config parses and validates (-strict fails on warnings)
+wyrm validate             # check the effective config parses and validates (-strict, -explain)
+wyrm diff [name]          # how the running session differs from its config
+wyrm allow [path]         # trust a project config so wyrm runs its commands (-list, -revoke)
+wyrm deny [path]          # refuse a project config
 wyrm send TARGET [CMD]     # send command or keys to target session/window/pane (-l, -n, -r)
 wyrm list                 # list running tmux sessions non-interactively
 wyrm list-configs         # list candidate config file paths (used by shell completion)
 wyrm migrate-config       # move the local config into the shared config directory
 wyrm init                 # scaffold a project config interactively or with -template (-force)
 wyrm clone REPO [DEST]    # git clone, then confirm and build a session for it (-y, -no-start)
+wyrm worktree BRANCH      # create a git worktree for BRANCH and start a session in it
+wyrm agent next|approve   # jump to the next waiting agent, or accept a blocked agent's prompt
+wyrm wait TARGET...       # wait for tcp:HOST:PORT, file:PATH, or a URL to be ready
+wyrm schema               # print the JSON Schema for .wyrm.toml
 wyrm selfupdate           # download and install the latest release
 wyrm setup-tmux           # generate or append recommended tmux popup configuration
 wyrm doctor               # check tmux, settings, configs, and optional tools (-strict)
@@ -100,6 +110,10 @@ attaches to it. Failing that, it looks for a *config* by that name — local or
 in the shared directory — and builds it, so any project can be started from
 anywhere without `cd`-ing to it first. wyrm always reports which config it
 resolved on stderr.
+
+A project config from outside your own wyrm directories — one that came with
+a repository you cloned, say — is shown to you and only run once you trust it.
+See [trusting project configs](guide.md#trusting-project-configs).
 
 If neither `.wyrm.toml` nor `.tmuxconfig` is found, wyrm falls back to
 `~/.config/wyrm/default.wyrm.toml` if you've created one, otherwise a
@@ -131,6 +145,13 @@ the [configuration reference](configuration.md) for each in full:
   tui`'s Projects panel, not just ones with a wyrm config.
 - **`[tmux]`** targets a non-default tmux server or binary
   (`socket`/`command`), for every tmux call wyrm makes.
+- **`extends`** builds a project's config on a shared base, overriding only
+  what differs.
+- **`[[workspace]]`** names a group of projects to start and stop together
+  with `wyrm @name`.
+- **`wyrm worktree BRANCH`** gives each branch its own worktree and session.
+
+The [guide](guide.md) covers each of these as a workflow.
 
 ## Diagnosing a setup
 
@@ -362,6 +383,132 @@ floating session manager over your current work:
 # ~/.tmux.conf — prefix + g opens the session manager in a popup
 bind g display-popup -d "#{pane_current_path}" -w 80% -h 80% -E "wyrm tui"
 ```
+
+### Finding a pane across every session
+
+The four panels drill down one level at a time — Sessions → Windows → Panes
+— which means reaching a specific pane three sessions away still means
+navigating there step by step. `f` skips that: it opens a searchable list of
+every pane on the server at once (session ▸ window ▸ pane, with its running
+command), the same job tmux's own `choose-tree -Z` does. Type to narrow,
+`↑`/`↓` to move, `Enter` to attach directly to that pane, `Esc` to close.
+Full-TUI only — `wyrm pick`'s compact form stays the two-panel chooser it's
+meant to be.
+
+### Mouse
+
+The mouse works throughout, and is on by default:
+
+| Action | Effect |
+|---|---|
+| Click | focus that panel and select the row |
+| Double-click | attach, landing on the clicked window/pane (on Projects: start the config's session) |
+| Right-click, or `M` | open a context menu for the row under the pointer |
+| Wheel | scroll the panel under the pointer |
+
+The context menu offers the actions for whatever you clicked — the same set the
+panel's footer advertises, so it teaches the keys rather than replacing them.
+It's driveable either way: `↑`/`↓` and `Enter`, or just click an entry. `Esc`,
+or a click anywhere else, dismisses it.
+
+**If right-click does nothing, your terminal is keeping it.** Several emulators
+reserve the right button for their own context menu and never forward button 3
+to the application — iTerm2 does this by default, so right-click never reaches
+wyrm no matter what tmux is set to. `M` opens the same menu from the keyboard
+and always works. To check whether your terminal forwards it, turn on mouse
+reporting in a shell and watch what arrives:
+
+```sh
+printf '\033[?1000h\033[?1006h'; cat -v   # click around; Ctrl-C when done
+printf '\033[?1000l\033[?1006l'           # then turn it back off
+```
+
+A left click prints something like `^[[<0;42;9M`. If a right click prints
+nothing, the terminal swallowed it.
+
+```
+├ Sessions ─────┤
+│ ● webapp  2w  │
+│   notes ╭──────────────────╮
+│   api   │ Attach         ↵ │
+├ Windows ┤ Rename session r │
+│ 0: code │ New window     n │
+│ 1: serve│ Kill session   x │
+└─────────╰──────────────────╯
+```
+
+Capturing the mouse takes click-drag text selection away from your terminal.
+Press `m` to hand it back for the rest of the session (most terminals also
+select on `Shift`-drag while it's captured), or turn it off permanently:
+
+```toml
+# ~/.config/wyrm/config.toml
+[tui]
+mouse = false
+```
+
+### Waiting agents
+
+`b` jumps to the next blocked agent anywhere on the server, and `Y` on the
+Panes panel approves the selected agent's prompt after asking — see
+[agents waiting on you](guide.md#agents-waiting-on-you).
+
+A pane running an AI coding agent gets a marker in every panel that contains it,
+so a session that needs you is visible without opening it:
+
+| Marker | Meaning |
+|---|---|
+| `⏸` | stopped on a prompt it can't answer itself — a permission request, a plan approval, a question |
+| `✓` | finished its turn and is waiting for the next instruction |
+
+A busy agent is deliberately unmarked: an indicator lit on every agent pane all
+the time is one nobody reads. Windows and sessions take the state of their most
+urgent pane, so `⏸` on a session means *something* in there is blocked.
+
+```
+├ Sessions ─────┤
+│ ● webapp  2w ⏸│   <- an agent is waiting on an answer
+│   notes   1w ✓│   <- an agent finished; nothing is blocked
+│   api     3w  │   <- no agent, or one that's still working
+```
+
+Detection reads the bottom of each agent pane with `capture-pane` — only panes
+whose command matches, never every pane on the server — on the same 3-second
+tick as the session list. It recognises `claude` out of the box; point it at
+other agents, or switch it off entirely, in `~/.config/wyrm/config.toml`:
+
+```toml
+[tui.agent]
+enabled  = true                  # false stops the scanning (and its cost)
+commands = ["claude", "aider"]   # #{pane_current_command} values to inspect
+```
+
+Notifications are off by default. Turn them on to be told when an agent starts
+waiting on you, without watching the TUI:
+
+```toml
+[tui.agent.notify]
+enabled    = true
+on_blocked = true    # waiting on an answer (default)
+on_idle    = false   # finished a turn
+desktop    = true    # OS notification; the default when notify is enabled
+```
+
+`bell` and `osc` add a terminal bell or an OSC 9/777 escape while the TUI is
+running. `command` runs a shell command instead of the desktop notification,
+with `WYRM_NOTIFY_TITLE`, `_MESSAGE`, `_STATE`, `_SESSION` and `_PANE` in its
+environment. See
+[`docs/configuration.md`](https://github.com/jskoll/wyrm/blob/main/docs/configuration.md#tuiagentnotify--being-told-when-an-agent-needs-you)
+for the full table.
+
+Terminal notifications are serialized with the TUI renderer. Clipboard,
+notification, zoxide, and non-interactive tmux helpers have a ten-second
+deadline; interactive attachment, editors, and lifecycle hooks are not limited.
+
+Because it reads what's on screen, an agent displaying a *screenshot* of a
+prompt — reviewing a diff of prompt-handling code, say — can be misread. The
+detector only matches the agent's own prompt chrome, never prose, which keeps
+that rare; and it self-corrects on the next refresh.
 
 ### Colors
 

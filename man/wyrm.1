@@ -30,10 +30,17 @@ for the discovery order.
 Build or attach the current folder's session. This is the default
 when no subcommand is given.
 .TP
-.BI "wyrm up [\-config " PATH "] [\-n] [\-d]"
+.BI "wyrm up [\-config " PATH "] [\-n] [\-d] [\-reconcile] [\-host " HOST ]
 Same as bare
 .BR wyrm ,
 spelled explicitly.
+.B \-reconcile
+adds the windows the config defines that a running session lacks, leaving
+the rest alone.
+.BI \-host " HOST"
+builds the session on
+.I HOST
+over ssh instead of locally.
 .TP
 .BI "wyrm " NAME
 Attach to a running session named
@@ -42,6 +49,15 @@ if one exists; otherwise start the known project named
 .I NAME
 (local or shared config).
 .TP
+.BI "wyrm @" WORKSPACE " [\-d]"
+Start every project in the
+.B [[workspace]]
+named
+.I WORKSPACE
+and attach to the first.
+.BI "wyrm kill @" WORKSPACE
+stops them all.
+.TP
 .BI "wyrm restart [\-config " PATH "] [\-n] [\-d] [\-all] [\-y]"
 Stop the session (running
 .B on_project_exit
@@ -49,7 +65,7 @@ first) and build it again from the current config. With
 .BR \-all ,
 restarts all active tmux sessions.
 .TP
-.BI "wyrm kill [" NAME "] [\-config " PATH "] [\-n] [\-all] [\-y]"
+.BI "wyrm kill [" NAME "] [\-config " PATH "] [\-n] [\-all] [\-y] [\-host " HOST ]
 Destroy the session, running
 .B on_project_exit
 first. With no name, targets the current folder's session; with
@@ -92,17 +108,33 @@ Open the resolved config in
 .BR vi ),
 creating one at the discovery location if none exists yet.
 .TP
-.BI "wyrm validate [\-config " PATH "] [\-strict]"
+.BI "wyrm validate [\-config " PATH "] [\-strict] [\-explain]"
 Check that the effective config parses and validates, without building a
 session.
 .B \-strict
 exits non-zero if the config has warnings (typos, deprecations).
+.B \-explain
+lists every place wyrm looked for a config and marks the one it chose.
+.TP
+.BI "wyrm diff [" NAME "] [\-config " PATH "] [\-format text|json]"
+Show how the running session differs from its config, window by window.
+Exits 1 when there are differences.
+.TP
+.BI "wyrm allow [" PATH "] [\-list] [\-revoke]"
+Trust a project config, so wyrm runs its commands without asking.
+.B \-list
+prints every decision;
+.B \-revoke
+forgets one.
+.TP
+.BI "wyrm deny [" PATH ]
+Refuse a project config: wyrm will not run it, nor ask about it again.
 .TP
 .BI "wyrm status [\-format " FMT "] [\-session " NAME "] [\-v] [\-watch] [\-interval " DURATION ]
 Display agent status across sessions.
 .I FMT
 is one of
-.BR text " (default), " json ", " tmux ", " waybar ", or " sketchybar .
+.BR text " (default), " json ", " jsonl ", " tmux ", " waybar ", or " sketchybar .
 With
 .BR \-watch " (or " \-w ),
 continuously streams status updates.
@@ -180,8 +212,36 @@ optional tools ($EDITOR, a clipboard backend, zoxide) are available.
 .IP
 Exits non-zero if anything is an error;
 .B \-strict
-also fails on warnings, for use in CI. It only reads state — nothing is
+also fails on warnings, for use in CI. It only reads state \(em nothing is
 repaired or written.
+.TP
+.BI "wyrm agent next [\-state blocked|idle|any]"
+Switch to the next agent pane in that state, after the current pane.
+.TP
+.BI "wyrm agent approve [" TARGET ]
+Send a blocked agent the keys that accept its prompt.
+.I TARGET
+is a pane ID or session; without one, exactly one agent must be blocked.
+.TP
+.BI "wyrm worktree " BRANCH " [\-base " REF "] [\-path " DIR "] [\-d]"
+Create (or reuse) a git worktree for
+.I BRANCH
+in
+.IB repo .worktrees/ branch
+and start a session in it.
+.TP
+.BI "wyrm wait [\-timeout " DURATION "] " TARGET ...
+Wait until every
+.I TARGET
+is ready:
+.BI tcp: HOST : PORT ,
+.BI file: PATH ,
+or an http(s) URL. Backs a split's
+.BR wait_for .
+.TP
+.B wyrm schema
+Print the JSON Schema for
+.BR .wyrm.toml .
 .TP
 .B wyrm version
 Print the version and exit.
@@ -227,13 +287,13 @@ Deprecated legacy config name, still read if
 .B .wyrm.toml
 is absent.
 .TP
-.B $XDG_CONFIG_HOME/wyrm/settings.toml
+.B $XDG_CONFIG_HOME/wyrm/config.toml
 (falls back to
-.BR ~/.config/wyrm/settings.toml )
+.BR ~/.config/wyrm/config.toml )
 Global settings: local vs. shared config storage, the shared config
 directory, which tmux server/binary to target
 .RI ( [tmux] ),
-and TUI preferences.
+TUI preferences, trust, and workspaces.
 .TP
 .B $XDG_CONFIG_HOME/wyrm/default.wyrm.toml
 User-supplied replacement for the built-in default config, used when no
@@ -249,13 +309,28 @@ and
 can tell a project's genuine first start from a later one. Written
 automatically; not meant to be edited by hand.
 .TP
-.BI $XDG_CONFIG_HOME/wyrm/ <folder> .wyrm.toml
+.B $XDG_CONFIG_HOME/wyrm/trust.toml
+Which project configs you have trusted or denied, each bound to a hash of
+its contents. Managed with
+.BR "wyrm allow" " and " "wyrm deny" .
+.TP
+.BI $XDG_CONFIG_HOME/wyrm/settings/ <folder> .wyrm.toml
 A project's config in the shared config directory, when
 .B storage = "shared"
 in the global settings. Populated by
 .B wyrm migrate-config
 or
 .BR "wyrm save" .
+.SH ENVIRONMENT
+.TP
+.B WYRM_TRUST_ALL
+Set to
+.B 1
+to run every config without a trust prompt, for scripts and CI.
+.TP
+.BR WYRM_TMUX_SOCKET ", " WYRM_TMUX_COMMAND
+Override
+.BR [tmux].socket " and " [tmux].command .
 .SH EXIT STATUS
 .TP
 .B 0

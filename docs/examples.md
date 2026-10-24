@@ -71,3 +71,10 @@ The template a [`[[wildcard]]`](configuration.md#wildcard-one-config-many-direct
 entry points at — applied to every directory a glob pattern matches, instead
 of a `.wyrm.toml` per directory. Goes in the shared config directory, not a
 project root.
+
+## [services.wyrm.toml](https://github.com/jskoll/wyrm/blob/main/examples/services.wyrm.toml)
+
+Panes that depend on each other: [`wait_for`](configuration.md#wait_for)
+holds the app until the database accepts connections and the tests until the
+app answers its health check, and `hook_timeout` bounds the setup hook. Its
+first line is the `#:schema` directive that gives editors completion.

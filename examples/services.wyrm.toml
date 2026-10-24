@@ -1,0 +1,36 @@
+#:schema https://raw.githubusercontent.com/jskoll/wyrm/main/schema/wyrm.schema.json
+
+# A stack whose panes depend on each other: the database starts first, and
+# the app, migrations, and tests each wait for what they need instead of
+# racing it. Hooks are bounded so a stuck setup step can't hang `wyrm up`.
+
+[session]
+name = "services"
+root = "."
+hook_timeout = "5m"
+on_project_first_start = "docker compose pull"
+
+[[windows]]
+name = "stack"
+
+  [[windows.splits]]
+  run = "docker compose up db"
+
+  [[windows.splits]]
+  type = "h"
+  size = 50
+  command = "npm run dev"
+  wait_for = "tcp:localhost:5432"
+
+    [[windows.splits.children]]
+    type = "v"
+    command = "npm run test:e2e -- --watch"
+    wait_for = "http://localhost:3000/health"
+    wait_timeout = "3m"
+
+[[windows]]
+name = "db"
+
+  [[windows.splits]]
+  command = "psql postgres://localhost:5432/app"
+  wait_for = "tcp:localhost:5432"

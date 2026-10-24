@@ -81,11 +81,13 @@ makes layouts independent of the user's `base-index`/`pane-base-index`.
 ### Packages
 
 ```
-internal/config/   TOML types, validation, global settings, project discovery
-internal/session/  config -> live tmux session (Create/Kill)
+internal/config/   TOML types, validation, extends, global settings, project discovery, JSON Schema
+internal/trust/    which project configs the user agreed to run (trust.toml)
+internal/wait/     readiness checks behind wait_for / `wyrm wait`
+internal/session/  config -> live tmux session (Create/Kill/Reconcile/Diff)
 internal/freeze/   live tmux session -> config (the reverse; backs `wyrm save`)
 internal/sessions/ data layer over running sessions: list, kill, fuzzy match — no rendering
-internal/tmux/     Runner, Exec, DryRun, batching, list-* parsers
+internal/tmux/     Runner, Exec, SSH, DryRun, batching, list-* parsers
 internal/agent/    classifies what an AI agent in a pane is doing
 internal/editor/   $EDITOR resolution, shared by `wyrm edit` and the TUI
 internal/tui/      the Bubble Tea session manager (both `wyrm tui` and `wyrm pick`)
@@ -96,7 +98,14 @@ internal/tui/      the Bubble Tea session manager (both `wyrm tui` and `wyrm pic
 `config.ResolveEffective` is the single discovery chain, in order: explicit
 `-config` path → discovered local/shared file → user `default.wyrm.toml` →
 built-in embedded default. `app.resolveConfig` always prints which one it picked
-to stderr, because five layers is otherwise unexplainable to a user.
+to stderr, because five layers is otherwise unexplainable to a user;
+`wyrm validate -explain` (`config.Explain`) walks the same layers and shows
+what each one found.
+
+Discovery refuses a config another user could have written (`checkDiscoverable`
+in `owner_unix.go`): foreign owner, world-writable, or directly inside a
+world-writable directory such as `/tmp`. Upward discovery makes that a code
+execution path otherwise. An explicit `-config` skips the check.
 
 Two things that have caused real bugs and are now load-bearing:
 
@@ -110,6 +119,17 @@ Unknown TOML keys are collected via `DisallowUnknownFields` and surfaced as
 **warnings**, not errors — `wyrm validate -strict` turns them into a non-zero
 exit. They become errors in 1.0, alongside the `.tmuxconfig` filename and the
 flat `panes` list.
+
+### Trust
+
+Any verb that runs a config's shell must call `app.ensureTrusted` first (or
+`teardownOptions`, for kills, which still stop the session but without hooks).
+`trust.Required` exempts configs in the user's own wyrm dirs, configs with no
+commands, and the built-in default. A decision is keyed by path and bound to
+`Config.Fingerprint()`, which hashes every file in the `extends` chain as read
+at load. The TUI does the same through `checkTrust` / `trustNeededMsg`.
+Tests in `main` and `internal/tui` run with `WYRM_TRUST_ALL=1` from `TestMain`;
+a test of the prompt itself calls `requireTrust(t)`.
 
 ### Split tree semantics
 
@@ -171,13 +191,18 @@ lives in that file; don't scatter `//nolint` for it.
 
 ### Docs and changelog
 
-`README.md` and `docs/*.md` are maintained copies of the same material (README
-uses absolute GitHub URLs, docs uses relative links). A user-facing change
-usually touches:
+`docs/*.md` is the documentation and the source of truth (published with
+mkdocs; relative links). `README.md` is only the front page: pitch, install,
+the usage block, and links into the docs site (absolute URLs). `SECURITY.md`
+and `docs/security.md` are copies, as are `CONTRIBUTING.md` and
+`docs/contributing.md`. A user-facing change usually touches:
 
-1. `README.md`
-2. the matching page under `docs/` (`index.md`, `configuration.md`, `examples.md`)
+1. the matching page under `docs/` (`index.md`, `guide.md`, `configuration.md`, `examples.md`)
+2. `README.md`'s usage block, only if it adds or changes a command
 3. `CHANGELOG.md` under `## [Unreleased]` (Keep a Changelog format)
+4. `schema/wyrm.schema.json` when a config key changes —
+   `go run . schema > schema/wyrm.schema.json`; `TestSchemaMatchesCommittedFile`
+   fails until you do. Add a description for the key in `schemaHints`.
 
 Commits follow conventional commits: `feat:`, `fix:`, `docs:`, `test:`, `chore:`.
 Releases are tag-driven (`git tag v0.x.y && git push --tags`) via goreleaser,

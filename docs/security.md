@@ -20,11 +20,35 @@ executing commands from a config the user chose to run are out of scope;
 anything that makes wyrm execute code the *config author* didn't write is
 very much in scope.
 
+## Trust prompt
+
+wyrm asks before running a project config from outside the
+user's own wyrm directories (the wyrm config directory, `shared_dir`, and
+`[[wildcard]]` templates), showing every hook and pane command it would run.
+A yes is recorded in `~/.config/wyrm/trust.toml`, bound to a SHA-256 of the
+config and every base it `extends`, so any edit asks again. A config that runs
+no commands needs no decision. `wyrm allow`, `wyrm allow -revoke`, and
+`wyrm deny` manage decisions by hand; `WYRM_TRUST_ALL=1` or
+`[trust] enabled = false` turns the prompt off for automation.
+
+A way to make wyrm run a config's commands without a trust decision, other
+than the documented opt-outs above, is in scope.
+
+## Config discovery and other users
+
+Discovery walks up through parent directories, so it refuses a config another
+user could have written: one owned by a different user (root excepted), one
+writable by every user, or one directly inside a world-writable directory the
+user doesn't own, such as `/tmp`. An explicit `-config` path skips this check.
+
 ## Reading a config before running it
 
 `wyrm up -n` (and `wyrm restart -n`, `wyrm kill -n`) print the tmux commands
 and the lifecycle hooks a config would run, and execute neither. That is the
 supported way to inspect an unfamiliar config.
+
+`wyrm clone` goes through the trust prompt like any other start; pass
+`-no-start` (`-n`) to clone without resolving a config at all.
 
 Before 0.6.0, `-n` printed the hooks' tmux commands but ran `on_project_start`
 for real, which defeated the point. If you are on an older build, read the
