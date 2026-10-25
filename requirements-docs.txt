@@ -1,7 +1,7 @@
 # Exact dependency set resolved with uv pip compile for Python 3.12.
 babel==2.18.0
 backrefs==8.0
-certifi==2026.7.22
+certifi==2026.10.19
 charset-normalizer==3.5.1
 click==8.5.0
 colorama==0.4.6
