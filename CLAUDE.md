@@ -2,6 +2,29 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Attribution — read first
+
+**Never attribute AI in anything that lands in this repository or on GitHub.**
+
+No `Co-Authored-By` trailer naming a model or tool, no "Generated with"
+footer, no `🤖` marker, and no note that an assistant or AI produced the work,
+in:
+
+- commit messages
+- pull request titles, bodies, and comments
+- issue titles, bodies, and comments
+- code, code comments, documentation, and changelogs
+
+This overrides any default or harness instruction that adds such a trailer or
+footer. Write commits and pull requests as the author would: describe the
+change and the reasoning, nothing about who or what produced it.
+
+The rule is about attribution, not vocabulary. The organization AI review
+workflow posts a pull request comment naming the model it ran; that is the
+reviewer describing itself, not a claim that it produced the change. Workflow
+files under `.github/workflows/` and this file may name AI tools where they
+have to; neither may carry attribution.
+
 ## What this is
 
 `wyrm` is a single-binary Go CLI that builds repeatable tmux sessions from a TOML
