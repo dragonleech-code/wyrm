@@ -18,6 +18,9 @@ const (
 	repo  = "wyrm"
 
 	apiBase = "https://api.github.com/repos/" + owner + "/" + repo
+
+	// maxReleaseMetadataSize bounds the release API response before JSON decoding.
+	maxReleaseMetadataSize = 4 * 1024 * 1024
 )
 
 // HTTPDoer is the subset of *http.Client selfupdate needs. Tests substitute
@@ -70,8 +73,16 @@ func fetch(client HTTPDoer, url string) (Release, error) {
 		return Release{}, fmt.Errorf("fetching %s: %s", url, resp.Status)
 	}
 
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxReleaseMetadataSize+1))
+	if err != nil {
+		return Release{}, fmt.Errorf("reading release metadata: %w", err)
+	}
+	if len(data) > maxReleaseMetadataSize {
+		return Release{}, fmt.Errorf("release metadata from %s exceeds maximum size of %d bytes", url, maxReleaseMetadataSize)
+	}
+
 	var gr ghRelease
-	if err := json.NewDecoder(resp.Body).Decode(&gr); err != nil {
+	if err := json.Unmarshal(data, &gr); err != nil {
 		return Release{}, fmt.Errorf("decoding release: %w", err)
 	}
 	rel := Release{
