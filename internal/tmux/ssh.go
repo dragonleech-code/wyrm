@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/jskoll/wyrm/internal/process"
 )
@@ -74,9 +75,21 @@ func (s SSH) sshArgs(remote string, tty bool) []string {
 	return append(args, s.Host, "--", remote)
 }
 
+func (s SSH) validateHost() error {
+	if s.Host == "" || strings.HasPrefix(s.Host, "-") || strings.IndexFunc(s.Host, func(r rune) bool {
+		return unicode.IsSpace(r) || unicode.IsControl(r)
+	}) >= 0 {
+		return fmt.Errorf("invalid ssh host %q: host must be non-empty, must not begin with '-', and must not contain whitespace or control characters", s.Host)
+	}
+	return nil
+}
+
 // Run implements Runner. As with Exec, stdout alone is returned on success
 // and stderr in its place on failure.
 func (s SSH) Run(args ...string) (string, error) {
+	if err := s.validateHost(); err != nil {
+		return "", err
+	}
 	cmd, cancel := process.Command("ssh", s.sshArgs(QuoteArgs(s.tmuxArgs(args)), false)...)
 	defer cancel()
 	out, err := cmd.Output()
@@ -96,6 +109,9 @@ func (s SSH) Run(args ...string) (string, error) {
 
 // Attach attaches the terminal to a remote session.
 func (s SSH) Attach(target string) error {
+	if err := s.validateHost(); err != nil {
+		return err
+	}
 	cmd := exec.Command("ssh", s.sshArgs(QuoteArgs(s.tmuxArgs([]string{"attach-session", "-t", target})), true)...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	return cmd.Run()
@@ -103,6 +119,9 @@ func (s SSH) Attach(target string) error {
 
 // Home returns the remote user's home directory.
 func (s SSH) Home() (string, error) {
+	if err := s.validateHost(); err != nil {
+		return "", err
+	}
 	cmd, cancel := process.Command("ssh", s.sshArgs(`printf %s "$HOME"`, false)...)
 	defer cancel()
 	out, err := cmd.Output()
@@ -120,6 +139,9 @@ func (s SSH) Home() (string, error) {
 // added, streaming its output to w. A timeout ends the local ssh, which ends
 // the remote command with it.
 func (s SSH) RunShell(command, dir string, env []string, timeout time.Duration, w io.Writer) error {
+	if err := s.validateHost(); err != nil {
+		return err
+	}
 	ctx := context.Background()
 	if timeout > 0 {
 		var cancel context.CancelFunc
