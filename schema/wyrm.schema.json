@@ -32,6 +32,8 @@
         },
         "size": {
           "description": "Percentage of the split pane given to the new one (1-99).",
+          "maximum": 99,
+          "minimum": 1,
           "type": "integer"
         },
         "type": {
@@ -148,6 +150,7 @@
         },
         "startup_pane": {
           "description": "Pane index to focus in startup_window.",
+          "minimum": 0,
           "type": "integer"
         },
         "startup_window": {
