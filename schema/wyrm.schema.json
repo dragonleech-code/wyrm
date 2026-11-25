@@ -46,7 +46,7 @@
         },
         "wait_for": {
           "description": "Delay command or run until ready: tcp:HOST:PORT, file:PATH, or an http(s) URL.",
-          "pattern": "^[ \\t]*(?:tcp:.+:[^:'\\r\\n]+|file:[^'\\r\\n]+|https?://[^'\\r\\n]+)[ \\t]*$",
+          "pattern": "^[ \\t]*(?:tcp:(?:.+)?:[^:'\\r\\n]+|file:[^'\\r\\n]+|https?://[^'\\r\\n]+)[ \\t]*$",
           "type": "string"
         },
         "wait_timeout": {
