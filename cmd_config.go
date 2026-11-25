@@ -138,6 +138,16 @@ func (a *app) migrateConfig(args []string) error {
 	if err != nil {
 		return err
 	}
+	if sourceConfig.Extends != "" {
+		sources := sourceConfig.Sources()
+		if len(sources) < 2 {
+			return fmt.Errorf("resolving migrated config extends: base config was not loaded")
+		}
+		data, err = config.RewriteExtends(data, sources[1])
+		if err != nil {
+			return err
+		}
+	}
 	var rewrittenRoot string
 	if config.RootNeedsAbsolute(sourceConfig.Session.Root) {
 		rewrittenRoot = resolvedRoot
@@ -150,13 +160,26 @@ func (a *app) migrateConfig(args []string) error {
 	if err != nil {
 		return err
 	}
-	// Check the relocated meaning before writing or deleting anything.
-	migrated, _, err := config.Decode(data)
+	// Check the relocated meaning, including the full extends chain, before
+	// writing or deleting anything. The extends path was made absolute above,
+	// so a temporary config alongside src resolves the same base as the final
+	// shared config.
+	validationFile, err := os.CreateTemp(filepath.Dir(src), ".wyrm-migrate-*.toml")
+	if err != nil {
+		return err
+	}
+	validationPath := validationFile.Name()
+	defer func() { _ = os.Remove(validationPath) }()
+	if _, err := validationFile.Write(data); err != nil {
+		_ = validationFile.Close()
+		return err
+	}
+	if err := validationFile.Close(); err != nil {
+		return err
+	}
+	migrated, err := config.Load(validationPath)
 	if err != nil {
 		return fmt.Errorf("validating migrated config: %w", err)
-	}
-	if err := migrated.Validate(); err != nil {
-		return err
 	}
 	_, migratedRoot, err := migrated.Session.Resolve(filepath.Dir(dst))
 	if err != nil || !config.SamePath(migratedRoot, resolvedRoot) || migrated.Session.ProjectDir != cwd {
