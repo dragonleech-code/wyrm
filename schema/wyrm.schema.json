@@ -54,6 +54,7 @@
         },
         "zoom": {
           "description": "Deprecated alias for zoomed.",
+          "deprecated": true,
           "type": "boolean"
         },
         "zoomed": {
@@ -177,6 +178,7 @@
           },
           "panes": {
             "description": "Deprecated flat pane list; use splits.",
+            "deprecated": true,
             "items": {
               "additionalProperties": false,
               "properties": {
@@ -217,6 +219,7 @@
           },
           "synchronize_panes": {
             "description": "Deprecated alias for synchronize.",
+            "deprecated": true,
             "type": "boolean"
           }
         },
