@@ -110,6 +110,35 @@ func RewriteSessionString(data []byte, key, value string) ([]byte, error) {
 	return splice(data, insert, insert, text), nil
 }
 
+// RewriteExtends replaces the top-level extends value while preserving the
+// rest of the TOML document, including comments and formatting.
+func RewriteExtends(data []byte, value string) ([]byte, error) {
+	var parser unstable.Parser
+	parser.Reset(data)
+	for parser.NextExpression() {
+		n := parser.Expression()
+		if n.Kind != unstable.KeyValue {
+			continue
+		}
+		key := n.Key()
+		if !key.Next() || string(key.Node().Data) != "extends" {
+			continue
+		}
+		v := n.Value()
+		if v.Kind != unstable.String {
+			return nil, fmt.Errorf("rewriting extends: expected a string")
+		}
+		if err := parser.Error(); err != nil {
+			return nil, fmt.Errorf("rewriting extends: %w", err)
+		}
+		return splice(data, int(v.Raw.Offset), int(v.Raw.Offset+v.Raw.Length), tomlQuote(value)), nil
+	}
+	if err := parser.Error(); err != nil {
+		return nil, fmt.Errorf("rewriting extends: %w", err)
+	}
+	return nil, fmt.Errorf("rewriting extends: key not found")
+}
+
 func splice(data []byte, start, end int, text string) []byte {
 	out := append([]byte(nil), data[:start]...)
 	out = append(out, text...)
