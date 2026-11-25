@@ -796,9 +796,9 @@ func (ip *interpolator) note(form, before, after string) {
 	ip.used[form] = true
 }
 
-// str substitutes every var in s. Keys are applied longest first, then
-// alphabetically, so the result is deterministic and a longer name is never
-// clobbered by a shorter prefix of it.
+// str substitutes placeholders from the original string in one pass. Keys
+// are considered longest first, then alphabetically, so a longer name is
+// never clobbered by a shorter prefix and replacement values are not expanded.
 func (ip *interpolator) str(s string) string {
 	if s == "" || len(ip.vars) == 0 {
 		return s
@@ -814,27 +814,77 @@ func (ip *interpolator) str(s string) string {
 		return keys[i] < keys[j]
 	})
 
-	res := s
-	for _, k := range keys {
-		v := ip.vars[k]
-		for _, form := range []struct{ placeholder, shown string }{
-			{"{{.var." + k + "}}", "{{.var.name}}"},
-			{"{{var." + k + "}}", "{{var.name}}"},
-			{"{{." + k + "}}", "{{.name}}"},
-		} {
-			next := strings.ReplaceAll(res, form.placeholder, v)
-			ip.note(form.shown, res, next)
-			res = next
+	var out strings.Builder
+	for i := 0; i < len(s); {
+		if s[i] == '{' && strings.HasPrefix(s[i:], "{{") {
+			if end := strings.Index(s[i+2:], "}}"); end >= 0 {
+				body := s[i+2 : i+2+end]
+				for _, k := range keys {
+					forms := []struct {
+						body  string
+						shown string
+					}{
+						{".var." + k, "{{.var.name}}"},
+						{"var." + k, "{{var.name}}"},
+						{"." + k, "{{.name}}"},
+						{k, ""},
+					}
+					for _, form := range forms {
+						if body != form.body {
+							continue
+						}
+						value := ip.vars[k]
+						placeholder := s[i : i+2+end+2]
+						if form.shown != "" && placeholder != value {
+							ip.note(form.shown, placeholder, value)
+						}
+						out.WriteString(value)
+						i += len(placeholder)
+						goto next
+					}
+				}
+			}
 		}
-		res = strings.ReplaceAll(res, "{{"+k+"}}", v)
-		next := strings.ReplaceAll(res, "${"+k+"}", v)
-		ip.note("${name}", res, next)
-		res = next
-		next = replaceBareVar(res, k, v)
-		ip.note("$name", res, next)
-		res = next
+
+		if s[i] == '$' {
+			if strings.HasPrefix(s[i:], "${") {
+				if end := strings.IndexByte(s[i+2:], '}'); end >= 0 {
+					key := s[i+2 : i+2+end]
+					if value, ok := ip.vars[key]; ok {
+						placeholder := s[i : i+2+end+1]
+						if placeholder != value {
+							ip.note("${name}", placeholder, value)
+						}
+						out.WriteString(value)
+						i += len(placeholder)
+						continue
+					}
+				}
+			}
+			for _, k := range keys {
+				placeholder := "$" + k
+				if !strings.HasPrefix(s[i:], placeholder) {
+					continue
+				}
+				end := i + len(placeholder)
+				if end < len(s) && isIdentChar(s[end]) {
+					continue
+				}
+				value := ip.vars[k]
+				if placeholder != value {
+					ip.note("$name", placeholder, value)
+				}
+				out.WriteString(value)
+				i = end
+				goto next
+			}
+		}
+
+		out.WriteByte(s[i])
+		i++
+	next:
 	}
-	return res
+	return out.String()
 }
 
 func isIdentChar(b byte) bool {
