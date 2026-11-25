@@ -262,6 +262,7 @@ func (m Model) handleSearchLocation(msg searchLocationMsg) (tea.Model, tea.Cmd) 
 	if m.mode != modeSearch || msg.id != m.searchID {
 		return m, nil
 	}
+	m.searchResolving = false
 	if msg.err != nil {
 		m.mode = m.searchReturnMode
 		m.err = msg.err
