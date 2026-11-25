@@ -65,7 +65,14 @@ func prepareRemote(r remoteRunner, cfg *config.Config) error {
 
 func (a *app) upRemote(settings *config.Settings, cfg *config.Config, host string, dryRun, detach bool) error {
 	r := newSSHRunner(host, settings)
-	if err := prepareRemote(r, cfg); err != nil {
+	if dryRun {
+		// The remote home is unknowable without connecting to the host. Keep
+		// ~/ paths symbolic in the transcript rather than making dry-run depend
+		// on SSH availability.
+		if err := cfg.ForRemote("$HOME"); err != nil {
+			return err
+		}
+	} else if err := prepareRemote(r, cfg); err != nil {
 		return err
 	}
 	hist, err := state.Load()
@@ -75,6 +82,7 @@ func (a *app) upRemote(settings *config.Settings, cfg *config.Config, host strin
 	if dryRun {
 		a.dryRunHeader("dry run: no tmux commands are executed on " + host + ", no")
 		a.dryRunHeader("lifecycle hooks are run.")
+		a.dryRunHeader("remote ~/ paths are shown relative to $HOME.")
 		_, _, _, err := session.Create(tmux.NewDryRun(a.stdout), cfg, io.Discard, a.stderr,
 			append(remoteOptions(r), session.DryRun(a.stdout), session.WithHistory(hostHistory{host, hist}))...)
 		return err
