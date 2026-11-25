@@ -121,8 +121,8 @@ func TestWaitForGatesCommand(t *testing.T) {
 	}
 	got := strings.Join(r.joined(), "\n")
 	for _, want := range []string{
-		"send-keys -t %1 -l -- '/bin/wyrm' wait -timeout 30s 'tcp:localhost:5432' && psql",
-		"respawn-pane -k -t %2 -c /tmp/proj -- '/bin/wyrm' wait -timeout 2m0s 'file:/tmp/ready' && npm run dev",
+		"send-keys -t %1 -l -- '/bin/wyrm' wait -timeout 30s 'tcp:localhost:5432' && eval 'psql'",
+		"respawn-pane -k -t %2 -c /tmp/proj -- '/bin/wyrm' wait -timeout 2m0s 'file:/tmp/ready' && eval 'npm run dev'",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing %q in:\n%s", want, got)
