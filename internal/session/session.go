@@ -734,7 +734,9 @@ type splitCtx struct {
 // gate prefixes command with a `wyrm wait` for the split's wait_for, so the
 // pane opens at once but its command only starts when the dependency is
 // ready. The pane's shell (or, for run, the shell tmux starts it with) runs
-// "wyrm wait ... && command", which every POSIX shell and fish 3+ accept.
+// "wyrm wait ... && eval 'command'", which every POSIX shell and fish 3+
+// accept. eval keeps compound commands behind the gate without relying on
+// shell-specific grouping syntax.
 //
 // The binary path and spec go in single quotes. wait.Parse already refuses a
 // quote in the spec; a binary path containing one can't be quoted the same way
@@ -752,7 +754,7 @@ func (ctx splitCtx) gate(s config.Split, command string, stderr io.Writer) strin
 	if timeout == 0 {
 		timeout = wait.DefaultTimeout
 	}
-	return fmt.Sprintf("'%s' wait -timeout %s '%s' && %s", exe, timeout, s.WaitFor, command)
+	return fmt.Sprintf("'%s' wait -timeout %s '%s' && eval %s", exe, timeout, s.WaitFor, tmux.Quote(command))
 }
 
 // applySplits walks a split tree. Each entry with a type splits the pane of
