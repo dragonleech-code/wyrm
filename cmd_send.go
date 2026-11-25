@@ -89,6 +89,9 @@ func resolveSendTarget(r tmux.Runner, target string) (string, error) {
 	}
 
 	sessPart, rest, hasColon := strings.Cut(target, ":")
+	if hasColon && rest == "" {
+		return "", fmt.Errorf("empty window name in target %q", target)
+	}
 	sessName := sessPart
 	winName := ""
 	paneSpec := ""
