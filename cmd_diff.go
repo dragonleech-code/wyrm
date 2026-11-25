@@ -22,6 +22,8 @@ func (a *app) diff(args []string) error {
 	fs := a.newFlagSet("diff")
 	configPath := fs.String("config", "", "path to config file (default: .wyrm.toml, then .tmuxconfig)")
 	format := fs.String("format", "text", "output format: text or json")
+	var vars varMapFlag
+	fs.Var(&vars, "var", "set template variable (KEY=VALUE, can be repeated)")
 	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
@@ -51,6 +53,7 @@ func (a *app) diff(args []string) error {
 	} else if cfg, _, err = a.resolveConfig(settings, *configPath); err != nil {
 		return err
 	}
+	a.interpolate(cfg, vars)
 
 	name, _, drift, err := session.Diff(a.runner, cfg)
 	if err != nil {

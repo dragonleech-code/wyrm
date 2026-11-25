@@ -454,10 +454,10 @@ other wyrm feature works on 3.1+.
 
 ## Template variables (`-var`)
 
-`wyrm up`, `restart`, `validate`, and `wyrm <name>` take `-var KEY=VALUE`
-(repeatable). Each `{{KEY}}` in the config's names, roots, hooks, commands, and
-env values is replaced with `VALUE`, and `KEY` is also exported into the
-session's environment:
+`wyrm up`, `restart`, `validate`, `diff`, `kill`, and `wyrm <name>` take
+`-var KEY=VALUE` (repeatable). Each `{{KEY}}` in the config's names, roots,
+hooks, commands, and env values is replaced with `VALUE`, and `KEY` is also
+exported into the session's environment:
 
 ```toml
 [session]

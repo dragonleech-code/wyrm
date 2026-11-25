@@ -71,7 +71,7 @@ complete -c wyrm -n '__fish_seen_subcommand_from worktree' -o d -d 'start the se
 complete -c wyrm -n '__fish_seen_subcommand_from up restart' -o d -d 'build the session without attaching'
 complete -c wyrm -n '__fish_seen_subcommand_from up restart' -o n -d 'dry run: print without touching tmux'
 complete -c wyrm -n '__fish_seen_subcommand_from kill' -o n -d 'print the hook and kill that would run, without touching tmux'
-complete -c wyrm -n '__fish_seen_subcommand_from up restart validate' -o var -d 'set template variable (KEY=VALUE, can be repeated)'
+complete -c wyrm -n '__fish_seen_subcommand_from up restart validate diff kill' -o var -d 'set template variable (KEY=VALUE, can be repeated)'
 complete -c wyrm -n '__fish_seen_subcommand_from validate' -o strict -d 'exit non-zero if the config has warnings'
 complete -c wyrm -n '__fish_seen_subcommand_from restart kill' -o all -d 'apply to all active sessions'
 complete -c wyrm -n '__fish_seen_subcommand_from restart kill' -o a -d 'apply to all active sessions'

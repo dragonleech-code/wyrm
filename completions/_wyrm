@@ -110,7 +110,8 @@ _wyrm() {
                         '-yes[skip confirmation prompt]' \
                         '-y[skip confirmation prompt]' \
                         '-host[ssh host the session runs on]:host:_hosts' \
-                        '-n[dry run]'
+                        '-n[dry run]' \
+                        '-var[set template variable (KEY=VALUE, can be repeated)]:variable:'
                     ;;
                 allow)
                     _arguments '-list[list trusted and denied configs]' \
@@ -122,7 +123,8 @@ _wyrm() {
                     ;;
                 diff)
                     _arguments '-config[config file path]:config file:->configs' \
-                        '-format[output format]:format:(text json)'
+                        '-format[output format]:format:(text json)' \
+                        '-var[set template variable (KEY=VALUE, can be repeated)]:variable:'
                     ;;
                 wait)
                     _arguments '-timeout[give up after this long]:duration:'

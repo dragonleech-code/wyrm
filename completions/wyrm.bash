@@ -72,9 +72,9 @@ _wyrm_complete() {
             edit) COMPREPLY=($(compgen -W "-config" -- "$cur")) ;;
             validate) COMPREPLY=($(compgen -W "-config -strict -explain -var" -- "$cur")) ;;
             restart) COMPREPLY=($(compgen -W "-config -n -d -all -a -yes -y -var" -- "$cur")) ;;
-            kill) COMPREPLY=($(compgen -W "-config -n -all -a -yes -y -host" -- "$cur")) ;;
+            kill) COMPREPLY=($(compgen -W "-config -n -all -a -yes -y -host -var" -- "$cur")) ;;
             allow) COMPREPLY=($(compgen -W "-list -revoke" -- "$cur")) ;;
-            diff) COMPREPLY=($(compgen -W "-config -format" -- "$cur")) ;;
+            diff) COMPREPLY=($(compgen -W "-config -format -var" -- "$cur")) ;;
             wait) COMPREPLY=($(compgen -W "-timeout" -- "$cur")) ;;
             agent) COMPREPLY=($(compgen -W "-state" -- "$cur")) ;;
             worktree) COMPREPLY=($(compgen -W "-base -path -d" -- "$cur")) ;;
