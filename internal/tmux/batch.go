@@ -3,6 +3,7 @@ package tmux
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -141,6 +142,12 @@ func RunEach(r Runner, cmds [][]string) []error {
 		}
 		// len(results) commands ran; the next one is where it stopped.
 		start = min(len(results), len(cmds))
+		if errors.Is(err, ErrNoServer) {
+			for i := start; i < len(errs); i++ {
+				errs[i] = err
+			}
+			return errs
+		}
 	}
 
 	for i := start; i < len(cmds); i++ {
@@ -178,6 +185,9 @@ func RunOutputs(r Runner, cmds [][]string) []string {
 			return outs
 		}
 		start = min(len(results), len(cmds))
+		if errors.Is(err, ErrNoServer) {
+			return outs
+		}
 	}
 
 	for i := start; i < len(cmds); i++ {
