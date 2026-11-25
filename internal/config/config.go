@@ -890,31 +890,3 @@ func (ip *interpolator) str(s string) string {
 func isIdentChar(b byte) bool {
 	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '_'
 }
-
-func replaceBareVar(s, k, v string) string {
-	target := "$" + k
-	if !strings.Contains(s, target) {
-		return s
-	}
-	var sb strings.Builder
-	targetLen := len(target)
-	i := 0
-	for i < len(s) {
-		idx := strings.Index(s[i:], target)
-		if idx == -1 {
-			sb.WriteString(s[i:])
-			break
-		}
-		pos := i + idx
-		sb.WriteString(s[i:pos])
-		nextIdx := pos + targetLen
-		if nextIdx < len(s) && isIdentChar(s[nextIdx]) {
-			// Next character continues an identifier (e.g. $PORT_SSL when matching $PORT), so keep as is
-			sb.WriteString(target)
-		} else {
-			sb.WriteString(v)
-		}
-		i = nextIdx
-	}
-	return sb.String()
-}
