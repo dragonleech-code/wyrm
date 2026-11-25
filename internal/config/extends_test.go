@@ -120,7 +120,7 @@ func TestExtendsMissingBase(t *testing.T) {
 	dir := t.TempDir()
 	write(t, filepath.Join(dir, "a.toml"), "extends = \"nope.toml\"\n[session]\nname = \"x\"\n[[windows]]\nname = \"w\"\n")
 	_, err := Load(filepath.Join(dir, "a.toml"))
-	if err == nil || !strings.Contains(err.Error(), "extends") {
+	if err == nil || !strings.Contains(err.Error(), "checking extended config") {
 		t.Fatalf("err = %v", err)
 	}
 }

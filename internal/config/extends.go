@@ -21,12 +21,17 @@ const maxExtendsDepth = 8
 // The merged config is not validated: a base is typically partial (a shared
 // [session] block with no windows, say) and only the final merge has to stand
 // on its own. Load validates that.
-func loadChain(abs string, h hash.Hash, visited []string) (*Config, []string, error) {
+func loadChain(abs string, h hash.Hash, visited []string, checkExtended bool) (*Config, []string, error) {
 	if slices.Contains(visited, abs) {
 		return nil, nil, fmt.Errorf("extends cycle: %s", formatChain(append(visited, abs)))
 	}
 	if len(visited) >= maxExtendsDepth {
 		return nil, nil, fmt.Errorf("extends chain deeper than %d: %s", maxExtendsDepth, formatChain(visited))
+	}
+	if checkExtended && len(visited) > 0 {
+		if err := checkDiscoverable(filepath.Dir(abs), abs); err != nil {
+			return nil, nil, fmt.Errorf("%s: checking extended config: %w", abs, err)
+		}
 	}
 	data, err := os.ReadFile(abs)
 	if err != nil {
@@ -58,7 +63,7 @@ func loadChain(abs string, h hash.Hash, visited []string) (*Config, []string, er
 	if err != nil {
 		return nil, nil, fmt.Errorf("%s: resolving extends: %w", abs, err)
 	}
-	base, baseUnknown, err := loadChain(basePath, h, append(visited, abs))
+	base, baseUnknown, err := loadChain(basePath, h, append(visited, abs), checkExtended)
 	if err != nil {
 		return nil, nil, err
 	}
