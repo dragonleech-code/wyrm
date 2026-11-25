@@ -256,6 +256,9 @@ func (a *app) edit(args []string) error {
 	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
+	if err := requireNoArgs(fs); err != nil {
+		return err
+	}
 	settings, err := config.LoadSettings()
 	if err != nil {
 		return err
