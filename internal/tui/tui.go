@@ -891,7 +891,8 @@ func (m Model) handleSessions(msg sessionsMsg) (tea.Model, tea.Cmd) {
 		m.err = msg.err
 		return m, nil
 	}
-	m.err = nil
+	// A successful list refresh may run in the background, so it must not
+	// dismiss an action error or warning before the user presses a key.
 	// Capture the selected session's identity before the list underneath
 	// it is replaced outright: a periodic refresh can add, remove, or
 	// reorder sessions with no input from the user, and a bare index
