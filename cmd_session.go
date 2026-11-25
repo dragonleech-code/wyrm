@@ -438,6 +438,8 @@ func (a *app) kill(args []string) error {
 	yesFlag := fs.Bool("y", false, "skip confirmation prompt when killing all sessions")
 	yesLong := fs.Bool("yes", false, "alias for -y")
 	host := fs.String("host", "", "kill the session on this ssh host (as built by up -host)")
+	var vars varMapFlag
+	fs.Var(&vars, "var", "set template variable (KEY=VALUE, can be repeated)")
 	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
@@ -457,7 +459,7 @@ func (a *app) kill(args []string) error {
 		if fs.NArg() > 0 {
 			return usageErrf("session name and -all are mutually exclusive")
 		}
-		return a.killAll(settings, *dryRun, yes)
+		return a.killAll(settings, *dryRun, yes, vars)
 	}
 
 	if fs.NArg() > 1 {
@@ -472,18 +474,19 @@ func (a *app) kill(args []string) error {
 			return usageErrf("-host kills the current folder's session; it can't be combined with a session name")
 		}
 		if strings.HasPrefix(target, "@") {
-			return a.killWorkspace(settings, strings.TrimPrefix(target, "@"), *dryRun)
+			return a.killWorkspace(settings, strings.TrimPrefix(target, "@"), *dryRun, vars)
 		}
 		if *configPath != "" {
 			return usageErrf("-config and a session name are mutually exclusive")
 		}
-		return a.killByName(settings, target, *dryRun)
+		return a.killByName(settings, target, *dryRun, vars)
 	}
 
 	cfg, _, err := a.resolveConfig(settings, *configPath)
 	if err != nil {
 		return err
 	}
+	a.interpolate(cfg, vars)
 	if *host != "" {
 		return a.killRemote(settings, cfg, *host, *dryRun)
 	}
@@ -504,7 +507,7 @@ func (a *app) kill(args []string) error {
 	return nil
 }
 
-func (a *app) killAll(settings *config.Settings, dryRun, yes bool) error {
+func (a *app) killAll(settings *config.Settings, dryRun, yes bool, vars map[string]string) error {
 	active, err := sessions.List(a.runner)
 	if err != nil {
 		return err
@@ -532,6 +535,7 @@ func (a *app) killAll(settings *config.Settings, dryRun, yes bool) error {
 	for _, s := range active {
 		if project, found := sessions.FindProject(index, s.Name); found {
 			if cfg, err := project.LoadConfig(); err == nil {
+				a.interpolate(cfg, vars)
 				kopts := opts
 				if !dryRun {
 					var terr error
@@ -574,7 +578,7 @@ func (a *app) killOptions(settings *config.Settings, cfg *config.Config, opts []
 	return a.teardownOptions(settings, cfg, opts)
 }
 
-func (a *app) killByName(settings *config.Settings, target string, dryRun bool) error {
+func (a *app) killByName(settings *config.Settings, target string, dryRun bool, vars map[string]string) error {
 	var opts []session.Option
 	if dryRun {
 		opts = a.teardownDryRun()
@@ -591,6 +595,7 @@ func (a *app) killByName(settings *config.Settings, target string, dryRun bool) 
 	if ok {
 		if project, found := config.FindProject(settings, target); found {
 			if cfg, cerr := project.LoadConfig(); cerr == nil {
+				a.interpolate(cfg, vars)
 				if name, _, rerr := cfg.Session.Resolve(cfg.Dir()); rerr == nil && name == target {
 					kopts, terr := a.killOptions(settings, cfg, opts, dryRun)
 					if terr != nil {
@@ -626,6 +631,7 @@ func (a *app) killByName(settings *config.Settings, target string, dryRun bool) 
 	// to misidentify here, so trusting the config match is safe.
 	if project, found := config.FindProject(settings, target); found {
 		if cfg, err := project.LoadConfig(); err == nil {
+			a.interpolate(cfg, vars)
 			kopts, terr := a.killOptions(settings, cfg, opts, dryRun)
 			if terr != nil {
 				return terr

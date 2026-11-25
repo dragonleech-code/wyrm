@@ -109,7 +109,7 @@ func (a *app) upWorkspace(name string, args []string) error {
 // killWorkspace stops every running project in the workspace, running each
 // one's on_project_exit. A member that isn't running is skipped quietly:
 // stopping a workspace means "none of these are running afterwards".
-func (a *app) killWorkspace(settings *config.Settings, name string, dryRun bool) error {
+func (a *app) killWorkspace(settings *config.Settings, name string, dryRun bool, vars map[string]string) error {
 	projects, err := workspaceProjects(settings, name)
 	if err != nil {
 		return err
@@ -125,6 +125,7 @@ func (a *app) killWorkspace(settings *config.Settings, name string, dryRun bool)
 			failures = append(failures, fmt.Errorf("%s: %w", p.Name, err))
 			continue
 		}
+		a.interpolate(cfg, vars)
 		opts, err := a.killOptions(settings, cfg, slices.Clone(base), dryRun)
 		if err != nil {
 			failures = append(failures, fmt.Errorf("%s: %w", p.Name, err))
