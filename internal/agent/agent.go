@@ -121,10 +121,8 @@ var DefaultApproveKeys = []string{"Enter"}
 // ApproveKeys returns the keys that approve a blocked pane running command.
 func ApproveKeys(command string, profiles []Profile) []string {
 	for _, p := range profiles {
-		for _, c := range p.Commands {
-			if c == command && len(p.Approve) > 0 {
-				return p.Approve
-			}
+		if p.claims(command) && len(p.Approve) > 0 {
+			return p.Approve
 		}
 	}
 	return DefaultApproveKeys
