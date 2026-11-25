@@ -593,6 +593,7 @@ wyrm status --watch --interval 2s       # stream, for a bar that reads stdin
 |---|---|
 | `text` | a terminal, or `-v` for the per-pane list (the default) |
 | `json` | scripts — full per-pane detail plus a summary |
+| `jsonl` | status bars and editor plugins — one compact JSON object per line, especially with `-watch` |
 | `tmux` | `status-right`, with tmux `#[fg=...]` styling |
 | `waybar` | Waybar's JSON protocol (text, alt, tooltip, class) |
 | `sketchybar` | sketchybar's `icon=`/`label=` key-value output |
