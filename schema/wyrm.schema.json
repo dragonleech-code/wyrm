@@ -2,6 +2,24 @@
   "$defs": {
     "Split": {
       "additionalProperties": false,
+      "allOf": [
+        {
+          "not": {
+            "required": [
+              "command",
+              "run"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "zoom",
+              "zoomed"
+            ]
+          }
+        }
+      ],
       "properties": {
         "children": {
           "description": "Splits within this pane.",
@@ -161,6 +179,24 @@
       "description": "The session's windows, in order.",
       "items": {
         "additionalProperties": false,
+        "allOf": [
+          {
+            "not": {
+              "required": [
+                "panes",
+                "splits"
+              ]
+            }
+          },
+          {
+            "not": {
+              "required": [
+                "synchronize",
+                "synchronize_panes"
+              ]
+            }
+          }
+        ],
         "properties": {
           "env": {
             "additionalProperties": {
