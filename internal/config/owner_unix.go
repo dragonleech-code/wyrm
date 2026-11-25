@@ -9,9 +9,9 @@ import (
 )
 
 // checkDiscoverable refuses a discovered config that someone other than the
-// current user could have put there: a file owned by another user, a file any
-// user can write, or one sitting in a directory any user can write that we do
-// not own (/tmp, a shared mount).
+// current user could have put there: a file owned by another user, a symbolic
+// link, a file any user can write, or one sitting in a directory owned by
+// another user or writable by every user (/tmp, a shared mount).
 //
 // Discovery walks up through parent directories, so without this a
 // .wyrm.toml planted in /tmp ran its hooks for anyone typing `wyrm` anywhere
@@ -20,9 +20,12 @@ import (
 // the user vouching for it.
 func checkDiscoverable(dir, file string) error {
 	uid := int64(os.Getuid())
-	fi, err := os.Stat(file)
+	fi, err := os.Lstat(file)
 	if err != nil {
 		return err
+	}
+	if fi.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("refusing %s: it is a symbolic link (pass -config to use it anyway)", file)
 	}
 	st, ok := fi.Sys().(*syscall.Stat_t)
 	if !ok {
@@ -38,8 +41,13 @@ func checkDiscoverable(dir, file string) error {
 	if err != nil {
 		return err
 	}
-	if dst, ok := di.Sys().(*syscall.Stat_t); ok && di.Mode().Perm()&0o002 != 0 && int64(dst.Uid) != uid {
-		return fmt.Errorf("refusing %s: %s is writable by every user (pass -config to use it anyway)", file, dir)
+	if dst, ok := di.Sys().(*syscall.Stat_t); ok {
+		if int64(dst.Uid) != uid && dst.Uid != 0 {
+			return fmt.Errorf("refusing %s: %s is owned by uid %d, not you or root (pass -config to use it anyway)", file, dir, dst.Uid)
+		}
+		if di.Mode().Perm()&0o002 != 0 && int64(dst.Uid) != uid {
+			return fmt.Errorf("refusing %s: %s is writable by every user (pass -config to use it anyway)", file, dir)
+		}
 	}
 	return nil
 }
