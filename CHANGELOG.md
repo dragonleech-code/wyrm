@@ -6,6 +6,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-11-25
+
+### Security
+
+- **Config discovery rejects symbolic links** and any config whose containing
+  directory is not owned by the current user or root. Explicit `-config` paths
+  still skip the check.
+- **Trust covers every base in an implicit `extends` chain.** Each base config
+  is checked for discoverability and ownership as it loads, not only the file
+  the user named.
+- **Self-update release metadata is capped at 4 MiB** before decoding, with an
+  explicit error when a response exceeds the limit.
+- **Compound split commands are gated as one command.** Commands run through
+  the shell's `eval` builtin, so operators such as `;` or `&&` can no longer
+  escape a `wait_for` condition.
+- Releases build with Go 1.26.11, which fixes GO-2026-6859 in `net/http`.
+
+### Added
+
+- **Template variables for `diff` and `kill`.** `wyrm diff` and `wyrm kill`
+  accept repeatable `-var KEY=VALUE` flags, applied to the current, named,
+  workspace, remote and all-session config paths.
+- **`jsonl` status format.** `wyrm status -format jsonl` is listed in the table
+  and documented, with compact one-line JSON for status bars, editor plugins and
+  `-watch`.
+
+### Changed
+
+- **Conflicting split and window keys are rejected at load.** A split may not set
+  both `command` and `run`, or both `zoom` and `zoomed`. A window may not set both
+  `panes` and `splits`, or both `synchronize` and `synchronize_panes`.
+- **Split size and startup pane are range-checked.** `Split.size` must be 1
+  through 99, and `session.startup_pane` must be non-negative.
+- **`wait_for`, `wait_timeout` and `hook_timeout` are validated.** Timeouts take
+  non-negative Go duration syntax, including decimal and microsecond units.
+- **`wyrm edit` rejects positional arguments** and keeps the `-config` flag as
+  before.
+- **Config migration preserves relative `extends` paths** and validates the
+  rewritten config with `config.Load` before writing the shared file or removing
+  the source.
+- **Deprecated keys are marked in the JSON Schema:** `Split.zoom`,
+  `windows[].panes` and `windows[].synchronize_panes`.
+- **Remote dry runs stay offline.** `wyrm up -host -n` no longer looks up the
+  remote home directory, and `~/` paths are shown as `$HOME` in the transcript.
+- **Batched tmux commands stop once the server is gone.** When a batch reports
+  that no server is running, the remaining commands are skipped instead of each
+  starting another tmux process.
+
+### Fixed
+
+- Custom approval keys match normalized agent commands, and default keys are kept
+  when no profile sets one.
+- Footer errors and warnings stay visible across successful session-list
+  refreshes, and the existing keypress dismissal clears them.
+- The search loading state is cleared after every lookup outcome, including
+  errors and stale-target fallbacks.
+
+### Upgrading
+
+- Configs that set both `command` and `run` on a split, both `zoom` and `zoomed`,
+  both `panes` and `splits` on a window, or both `synchronize` and
+  `synchronize_panes` now fail to load. Keep only one key in each pair.
+- Split sizes outside 1–99 and a negative `session.startup_pane` are rejected.
+- A config file that is a symbolic link, or that sits in a directory not owned
+  by you or root, is no longer discovered automatically. Pass it with `-config`
+  or move it.
+
 ## [1.4.0] - 2026-10-24
 
 ### Security
@@ -925,7 +992,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - `wyrm -kill` no longer runs `on_project_exit` when the session isn't
   running.
 
-[Unreleased]: https://github.com/jskoll/wyrm/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/jskoll/wyrm/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/jskoll/wyrm/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/jskoll/wyrm/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/jskoll/wyrm/compare/v1.2.2...v1.3.0
 [1.2.2]: https://github.com/jskoll/wyrm/compare/v1.2.1...v1.2.2
