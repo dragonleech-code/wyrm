@@ -270,6 +270,16 @@ func isGitRoot(dir string) bool {
 
 // Load reads, parses, and validates a config file.
 func Load(path string) (*Config, error) {
+	return load(path, true)
+}
+
+// LoadExplicit reads a config named by the user and preserves the explicit
+// -config trust override for every file in its extends chain.
+func LoadExplicit(path string) (*Config, error) {
+	return load(path, false)
+}
+
+func load(path string, checkExtended bool) (*Config, error) {
 	// Not a silent fallback: cfg.dir is what a relative session.root resolves
 	// against, so losing it doesn't degrade gracefully — it quietly roots the
 	// session wherever the process happens to be standing.
@@ -278,7 +288,7 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("resolving %s: %w", path, err)
 	}
 	hash := sha256.New()
-	cfg, unknown, err := loadChain(abs, hash, nil)
+	cfg, unknown, err := loadChain(abs, hash, nil, checkExtended)
 	if err != nil {
 		return nil, err
 	}
@@ -570,7 +580,7 @@ func validateSplits(window string, splits []Split) error {
 // bare-`wyrm` flow, it never falls back to the interactive session picker.
 func ResolveEffective(settings *Settings, explicitPath string) (*Config, string, error) {
 	if explicitPath != "" {
-		cfg, err := Load(explicitPath)
+		cfg, err := LoadExplicit(explicitPath)
 		if err != nil {
 			return nil, "", err
 		}
