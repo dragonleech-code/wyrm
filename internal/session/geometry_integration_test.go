@@ -213,7 +213,7 @@ func TestIntegrationSplitPanesUseSessionRoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolving root: %v", err)
 	}
-	paths := panePaths(t, r, "rootit", "#{pane_id}")
+	paths := panePaths(t, r, "rootit", "#{pane_id}", wantRoot)
 	if len(paths) != 3 {
 		t.Fatalf("got %d panes, want 3: %v", len(paths), paths)
 	}
@@ -232,7 +232,25 @@ func TestIntegrationSplitPanesUseSessionRoot(t *testing.T) {
 // and the faster the build, the likelier that is. Asserting on the empty string
 // produced a confusing "pane is in \".\"" failure roughly one run in twenty,
 // because filepath.EvalSymlinks("") is ".".
-func panePaths(t *testing.T, r tmux.Runner, session, keyFormat string) map[string][]string {
+// panePaths returns each pane's resolved working directory, keyed by keyFormat.
+// A freshly split pane reports its parent's directory until its shell has
+// changed into the requested one, so when wantDir is set the poll keeps going
+// until every pane reports it; otherwise any non-empty path is accepted.
+func settled(byKey map[string][]string, wantDir string) bool {
+	if wantDir == "" {
+		return true
+	}
+	for _, paths := range byKey {
+		for _, p := range paths {
+			if p != wantDir {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func panePaths(t *testing.T, r tmux.Runner, session, keyFormat, wantDir string) map[string][]string {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
 	for {
@@ -257,7 +275,7 @@ func panePaths(t *testing.T, r tmux.Runner, session, keyFormat string) map[strin
 			}
 			byKey[key] = append(byKey[key], resolved)
 		}
-		if !empty {
+		if !empty && settled(byKey, wantDir) {
 			return byKey
 		}
 		if time.Now().After(deadline) {
@@ -315,7 +333,7 @@ func TestIntegrationWindowAndSplitRoots(t *testing.T) {
 		}
 		return r
 	}
-	got := panePaths(t, r, "wrootit", "#{window_name}")
+	got := panePaths(t, r, "wrootit", "#{window_name}", "")
 	want := map[string][]string{
 		"api":   {resolved(filepath.Join(root, "api")), resolved(filepath.Join(root, "api", "deep"))},
 		"web":   {resolved(filepath.Join(root, "web"))},
